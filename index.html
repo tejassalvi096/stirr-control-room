@@ -500,6 +500,19 @@ function goalCard(){
    +'<span><b class="tnum">'+money(Number(g.won_value)||0)+'/mo</b> won from leads</span>'
    +'</div></div>';
 }
+function toCSVUrl(u){
+  u=String(u||"").trim();
+  // already a CSV export or published-CSV link
+  if(/output=csv|format=csv|[?&]single=true/.test(u)) return u;
+  // normal share/edit link → build the CSV export endpoint for the specific tab
+  var m=u.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  if(m){
+    var id=m[1];
+    var g=u.match(/[#&?]gid=(\d+)/);
+    return "https://docs.google.com/spreadsheets/d/"+id+"/export?format=csv"+(g?("&gid="+g[1]):"");
+  }
+  return u;
+}
 function parseCSVLine(line){
   if(line.indexOf("\t")>=0) return line.split("\t");
   var out=[],cur="",q=false;
@@ -1056,7 +1069,7 @@ document.addEventListener("click",function(ev){
   if(act==="sheetlink"){
     var shm=Object.assign({},getSetting("sheets")||{});
     var cur=shm[UI.calClient]||"";
-    var u=prompt("Paste the published-CSV link for this client's calendar tab.\n\nIn Google Sheets: File → Share → Publish to web → choose the tab → CSV → Publish → copy the link.",cur);
+    var u=prompt("Paste this client's Google Sheet link.\n\nJust copy the normal link from the browser bar (the .../edit#gid=... one) — but first make sure the sheet is shared as 'Anyone with the link can view' (Share button, top right). That's it.",cur);
     if(u===null) return;
     u=u.trim();
     if(u) shm[UI.calClient]=u; else delete shm[UI.calClient];
@@ -1068,7 +1081,7 @@ document.addEventListener("click",function(ev){
   if(act==="sheetsync"){
     var shm2=getSetting("sheets")||{}; var surl2=shm2[UI.calClient]; if(!surl2) return;
     toast("Fetching the sheet…");
-    fetch(surl2).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.text(); })
+    fetch(toCSVUrl(surl2)).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.text(); })
     .then(function(text){
       var lines=text.split(/\r?\n/).filter(function(s){return s.trim();});
       var dup=0,rows=[];
@@ -1087,7 +1100,7 @@ document.addEventListener("click",function(ev){
       if(!rows.length){ toast(dup?("Nothing new — "+dup+" posts already on the calendar."):"No usable rows — check the link points to the published CSV of the right tab.",!dup); return; }
       run(Promise.all(rows.map(function(rw){return DB.insert("posts",rw);})).then(function(){ return refresh(); }),rows.length+" new posts synced from the sheet"+(dup?(", "+dup+" already there"):""));
     })
-    .catch(function(e){ toast("Could not read the sheet — is that tab published to web as CSV? ("+e.message+")",true); });
+    .catch(function(e){ toast("Could not read the sheet — open Share and set it to 'Anyone with the link can view', then try again. ("+e.message+")",true); });
     return;
   }
   if(act==="clearmonth"){
