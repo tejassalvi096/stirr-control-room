@@ -130,8 +130,9 @@ button.chip{cursor:pointer} button.chip:hover{filter:brightness(.96)}
 .goal-title em{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-weight:400;color:#C9C7E7;font-size:27px}
 .goal-days{margin-left:auto;text-align:right;font-family:"Archivo",sans-serif;font-weight:800;font-size:26px;letter-spacing:-.03em;color:#C9F24F}
 .goal-days span{display:block;font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:#9A9891;font-weight:400}
-.goal-bar{height:10px;background:#2A2A28;border-radius:99px;overflow:hidden;margin:14px 0 10px}
-.goal-bar i{display:block;height:100%;background:#C9F24F;border-radius:99px;min-width:4px}
+.goal-bar{position:relative;height:10px;background:#2A2A28;border-radius:99px;overflow:hidden;margin:14px 0 10px}
+.goal-bar span{position:absolute;left:0;top:0;height:100%;background:rgba(201,242,79,.34);border-radius:99px}
+.goal-bar i{position:absolute;left:0;top:0;height:100%;background:#C9F24F;border-radius:99px;min-width:2px}
 .goal-stats{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:#9A9891}
 .goal-stats b{color:#F6F5F1;font-weight:700}
 .stage-won h4{color:var(--green)} .stage-lost h4{color:var(--faint)}
@@ -307,10 +308,14 @@ var DB={
     if(DEMO){
       if(!DEMO_DB){ try{ DEMO_DB=JSON.parse(localStorage.getItem("stirr.demo"))||demoSeed(); }catch(e){ DEMO_DB=demoSeed(); } }
       TABLES.forEach(function(t){ S[KEYMAP[t]||t]=(DEMO_DB[t]||[]).slice(); });
-      var open=(S.leads||[]).filter(function(l){return l.stage!=="Won"&&l.stage!=="Lost";});
+      var gv=function(l){ return Number(l.goal_value)||leadGoalValue(l.kind,l.est_value); };
+      var openL=(S.leads||[]).filter(function(l){return l.stage!=="Won"&&l.stage!=="Lost";});
+      var wonL=(S.leads||[]).filter(function(l){return l.stage==="Won";});
       S.goal={target:2500000,label:"Japan",start_date:"2026-09-01",end_date:"2026-12-31",
-              collected:0,billed:0,pipeline:open.reduce(function(s,l){return s+(Number(l.est_value)||0);},0),
-              won_value:(S.leads||[]).filter(function(l){return l.stage==="Won";}).reduce(function(s,l){return s+(Number(l.est_value)||0);},0)};
+              collected:0,billed:0,
+              pipeline:openL.reduce(function(s,l){return s+gv(l);},0),
+              secured:wonL.reduce(function(s,l){return s+gv(l);},0),
+              won_value:wonL.reduce(function(s,l){return s+gv(l);},0)};
       return Promise.resolve();
     }
     return Promise.all(TABLES.map(function(t){
@@ -484,20 +489,22 @@ function tile(v,k,n,cls){ return '<div class="tile '+(cls||"")+'"><div class="k"
 function weekStart(){var d=new Date();var day=(d.getDay()+6)%7;d.setDate(d.getDate()-day);return iso(d);}
 function goalCard(){
   var g=S.goal; if(!g) return "";
-  var target=Number(g.target)||2500000, col=Number(g.collected)||0;
-  var pct=Math.min(100,Math.round(col/target*100));
+  var target=Number(g.target)||2500000;
+  var col=Number(g.collected)||0;
+  var secured=Math.max(Number(g.secured)||0,col); // won business toward Dec (never less than collected)
+  var pctSec=Math.min(100,Math.round(secured/target*100));
+  var pctCol=Math.min(100,Math.round(col/target*100));
   var end=g.end_date||"2026-12-31";
   var days=Math.max(0,Math.ceil((parseISO(end)-new Date())/86400000));
   return '<div class="goal-card">'
    +'<div class="goal-top"><div><div class="goal-eyebrow">Studio goal · '+esc(fmtD(g.start_date||"2026-09-01"))+' → '+esc(fmtD(end))+'</div>'
    +'<div class="goal-title">'+money(target)+' of new business, then <em>'+esc(g.label||"Japan")+'</em></div></div>'
    +'<div class="goal-days tnum">'+days+'<span>days left</span></div></div>'
-   +'<div class="goal-bar"><i style="width:'+Math.max(1,pct)+'%"></i></div>'
+   +'<div class="goal-bar" title="'+pctSec+'% won · '+pctCol+'% collected"><span style="width:'+Math.max(0,pctSec)+'%"></span><i style="width:'+Math.max(0,pctCol)+'%"></i></div>'
    +'<div class="goal-stats">'
-   +'<span><b class="tnum">'+money(col)+'</b> collected from new clients ('+pct+'%)</span>'
-   +'<span><b class="tnum">'+money(Number(g.billed)||0)+'</b> invoiced</span>'
-   +'<span><b class="tnum">'+money(Number(g.pipeline)||0)+'</b> in the leads pipeline</span>'
-   +'<span><b class="tnum">'+money(Number(g.won_value)||0)+'/mo</b> won from leads</span>'
+   +'<span><b class="tnum">'+money(secured)+'</b> won toward goal ('+pctSec+'%)</span>'
+   +'<span><b class="tnum">'+money(col)+'</b> collected in the bank ('+pctCol+'%)</span>'
+   +'<span><b class="tnum">'+money(Number(g.pipeline)||0)+'</b> still in the leads pipeline</span>'
    +'</div></div>';
 }
 function toCSVUrl(u){
@@ -524,6 +531,12 @@ function parseCSVLine(line){
   out.push(cur); return out;
 }
 function getSetting(k){ for(var i=0;i<S.settings.length;i++) if(S.settings[i].key===k) return S.settings[i].value; return null; }
+function monthsLeftInGoal(){
+  var g=S.goal||{}; var ed=parseISO(g.end_date||"2026-12-31"); var now=new Date();
+  var m=(ed.getFullYear()*12+ed.getMonth())-(now.getFullYear()*12+now.getMonth())+1;
+  return Math.max(1,m);
+}
+function leadGoalValue(kind,est){ est=Number(est)||0; return (kind==="one-time")?est:est*monthsLeftInGoal(); }
 function taskLogs(id){ return S.notes.filter(function(n){return n.to_name==="log:"+id;}).sort(function(a,b){return (a.created_at||"")<(b.created_at||"")?-1:1;}); }
 function fmtDT(ts){ if(!ts) return ""; var d=new Date(ts); if(isNaN(d)) return ""; var h=d.getHours(),m=d.getMinutes(),ap=h>=12?"pm":"am"; h=h%12||12; return d.getDate()+" "+["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()]+" "+h+":"+pad(m)+ap; }
 function yesterdayCard(){
@@ -618,7 +631,7 @@ function viewToday(){
    + tile(doneWeek,"Tasks done","whole studio, this week",doneWeek?"good":"")
    + tile(myDone,"By you","your tasks closed this week","")
    + tile(liveMonth,"Posts live","across clients this month","")
-   + tile(openLeads.length,"Open leads",money(sum(openLeads,"est_value"))+"/mo in pipeline","")
+   + tile(openLeads.length,"Open leads",money(openLeads.reduce(function(s,l){return s+(Number(l.goal_value)||leadGoalValue(l.kind,l.est_value));},0))+" in pipeline","")
    + tile(followupsDue,"Lead follow-ups due",followupsDue?"call them today":"none pending",followupsDue?"warn":"good")
    + '</div></div>';
 
@@ -735,10 +748,11 @@ function viewLeads(){
   var lost=S.leads.filter(function(l){return l.stage==="Lost";});
   var conv=(won.length+lost.length)?Math.round(won.length/(won.length+lost.length)*100):null;
   var h='<div class="sec-head"><h2 class="h-sec">Leads</h2><span class="sub">anyone can add a lead and move its stage — an enquiry not on this board does not exist</span></div>';
+  var gval=function(l){ return Number(l.goal_value)||leadGoalValue(l.kind,l.est_value); };
   h+='<div class="tiles">'
    + tile(open.length,"Open leads","being worked right now","")
-   + tile(money(sum(open,"est_value")),"Pipeline","per month if all of it closes","")
-   + tile(won.length,"Won",money(sum(won,"est_value"))+"/mo added",won.length?"good":"")
+   + tile(money(open.reduce(function(s,l){return s+gval(l);},0)),"Pipeline value","toward the goal if all close","")
+   + tile(won.length,"Won",money(won.reduce(function(s,l){return s+gval(l);},0))+" secured",won.length?"good":"")
    + tile(lost.length,"Lost","learn and move on","")
    + tile(conv===null?"—":conv+"%","Conversion","won vs lost so far","")
    +'</div>';
@@ -748,33 +762,36 @@ function viewLeads(){
    +'<div class="field"><label>Contact person</label><input type="text" name="contact_name"></div>'
    +'<div class="field"><label>Phone / WhatsApp</label><input type="text" name="contact_phone"></div>'
    +'<div class="field" style="flex:0 0 140px"><label>Source</label><select name="source">'+selOpts(LEAD_SOURCES,"Referral")+'</select></div>'
-   +'<div class="field"><label>What they want</label><input type="text" name="service" placeholder="e.g. SMM + reels"></div>'
-   +'<div class="field" style="flex:0 0 120px"><label>Value ₹/month</label><input type="number" name="est_value"></div>'
+   +'<div class="field"><label>What they want</label><input type="text" name="service" placeholder="e.g. SMM + reels, or one shoot"></div>'
+   +'<div class="field" style="flex:0 0 130px"><label>Deal type</label><select name="kind">'+selOpts(["Retainer","One-time"],"Retainer")+'</select></div>'
+   +'<div class="field" style="flex:0 0 150px"><label>Value ₹ (per month if retainer)</label><input type="number" name="est_value"></div>'
    +'<div class="field"><label>Owner</label>'+ownerSelect(myName(),[],'name="owner_name"')+'</div>'
    +'<div class="field" style="flex:0 0 145px"><label>Next follow-up</label><input type="date" name="next_date" value="'+addDays(t,2)+'"></div>'
-   +'<button class="btn" type="submit">Add lead</button></form></div></div>';
+   +'<button class="btn" type="submit">Add lead</button></form>'
+   +'<div class="sub" style="margin-top:8px">A <b>retainer</b> counts toward the goal as its monthly value × months left till December; a <b>one-time</b> project counts as its full amount. Both feed the Japan meter when the lead is marked Won.</div></div></div>';
   h+='<div style="height:14px"></div><div class="stages">'+LEAD_STAGES.map(function(st){
     var ls=S.leads.filter(function(l){return l.stage===st;});
-    return '<div class="stage'+(st==="Won"?" stage-won":st==="Lost"?" stage-lost":"")+'"><h4>'+st+'</h4><div class="cnt">'+ls.length+' · '+money(sum(ls,"est_value"))+'/mo</div>'
+    return '<div class="stage'+(st==="Won"?" stage-won":st==="Lost"?" stage-lost":"")+'"><h4>'+st+'</h4><div class="cnt">'+ls.length+' · '+money(ls.reduce(function(s,l){return s+gval(l);},0))+'</div>'
      + ls.map(function(l){
         var od=l.next_date&&l.next_date<t&&st!=="Won"&&st!=="Lost";
         return '<div class="item">'+esc(l.name)
-         +'<div class="p">'+money(l.est_value)+'/mo · '+esc(l.owner_name||"no owner")+'</div>'
+         +'<div class="p">'+money(l.est_value)+(l.kind==="one-time"?" one-time":"/mo")+' · '+esc(l.owner_name||"no owner")+'</div>'
          +(l.next_date&&st!=="Won"&&st!=="Lost"?'<div class="p"'+(od?' style="color:var(--red);font-weight:700"':"")+'>follow up '+fmtD(l.next_date)+(od?" — overdue":"")+'</div>':"")
          +'</div>';
        }).join("")+'</div>';
   }).join("")+'</div>';
-  h+='<div style="height:14px"></div><div class="card scroll"><table><thead><tr><th>Lead</th><th>Stage</th><th>Owner</th><th class="right">₹/month</th><th>Next follow-up</th><th>Notes</th><th></th></tr></thead><tbody>'
+  h+='<div style="height:14px"></div><div class="card scroll"><table><thead><tr><th>Lead</th><th>Stage</th><th>Type</th><th>Owner</th><th class="right">Value ₹</th><th>Next follow-up</th><th>Notes</th><th></th></tr></thead><tbody>'
    +(S.leads.length?S.leads.slice().sort(function(a,b){return LEAD_STAGES.indexOf(a.stage)-LEAD_STAGES.indexOf(b.stage)||(a.next_date||"9999")<(b.next_date||"9999")?-1:1;}).map(function(l){
       var od=l.next_date&&l.next_date<t&&l.stage!=="Won"&&l.stage!=="Lost";
       return '<tr class="'+(od?"od":"")+'"><td><b>'+esc(l.name)+'</b><br><span class="sub">'+esc(l.contact_name||"")+(l.contact_phone?(" · "+esc(l.contact_phone)):"")+(l.source?(" · "+esc(l.source)):"")+(l.service?(" · "+esc(l.service)):"")+'</span></td>'
        +'<td><select data-act="lset" data-f="stage" data-v="'+l.id+'">'+selOpts(LEAD_STAGES,l.stage)+'</select></td>'
+       +'<td><select data-act="lset" data-f="kind" data-v="'+l.id+'">'+selOpts(["Retainer","One-time"],(l.kind==="one-time"?"One-time":"Retainer"))+'</select></td>'
        +'<td>'+ownerSelect(l.owner_name,[],'data-act="lset" data-f="owner_name" data-v="'+l.id+'"')+'</td>'
-       +'<td class="right"><input type="number" data-act="lset" data-f="est_value" data-v="'+l.id+'" value="'+esc(l.est_value)+'" style="width:100px;text-align:right"></td>'
+       +'<td class="right"><input type="number" data-act="lset" data-f="est_value" data-v="'+l.id+'" value="'+esc(l.est_value)+'" style="width:100px;text-align:right" title="'+(l.kind==="one-time"?"one-time total":"per month")+'"></td>'
        +'<td><input type="date" data-act="lset" data-f="next_date" data-v="'+l.id+'" value="'+esc(l.next_date||"")+'" style="width:145px"></td>'
        +'<td><input type="text" data-act="lset" data-f="notes" data-v="'+l.id+'" value="'+esc(l.notes||"")+'" style="min-width:150px"></td>'
        +'<td class="right" style="white-space:nowrap">'+(l.stage==="Won"?'<button class="chip lime" data-act="lead2client" data-v="'+l.id+'">→ client</button> ':"")+'<button class="icon-btn" data-act="dellead" data-v="'+l.id+'">✕</button></td></tr>';
-    }).join(""):'<tr><td colspan="7" class="empty">No leads yet. Add the first one above — the Japan meter is fed from this board.</td></tr>')
+    }).join(""):'<tr><td colspan="8" class="empty">No leads yet. Add the first one above — the Japan meter is fed from this board.</td></tr>')
    +'</tbody></table></div>';
   return h;
 }
@@ -1154,17 +1171,28 @@ document.addEventListener("click",function(ev){
   }
   if(act==="lead2client"){
     var ld=byId(S.leads,v); if(!ld) return;
-    if(!confirm("Create a client from \""+ld.name+"\" and start onboarding?")) return;
+    var oneTime=ld.kind==="one-time";
+    if(!confirm("Create a client from \""+ld.name+"\" ("+(oneTime?"one-time project":"retainer")+") and start onboarding?")) return;
     var cc={name:ld.name,contact_name:ld.contact_name||"",contact_phone:ld.contact_phone||"",package:ld.service||"",
             start_date:today(),invoice_day:1,owner_id:pidByName(ld.owner_name)||myPersonId(),
-            status:"Onboarding",stage:"agreed",onb:{},notes:"From lead ("+(ld.source||"")+")"};
+            status:"Onboarding",stage:"agreed",onb:{},counts_for_goal:true,
+            notes:(oneTime?"One-time project ₹"+(Number(ld.est_value)||0)+" ":"")+"From lead ("+(ld.source||"")+")"};
     run(DB.insert("clients",cc).then(function(r){
       S.clients.push(r||cc);
-      if(financeOn()&&Number(ld.est_value)>0&&r&&r.id){
-        return DB.upsertFinance(r.id,{retainer:Number(ld.est_value)||0})
-          .then(function(){ S.finance.push({client_id:r.id,retainer:Number(ld.est_value)||0,renewal_date:null}); });
+      if(!(r&&r.id)) return;
+      var monthly=oneTime?0:(Number(ld.est_value)||0);
+      var chain=Promise.resolve();
+      if(financeOn()){
+        chain=DB.upsertFinance(r.id,{retainer:monthly}).then(function(){ S.finance.push({client_id:r.id,retainer:monthly,renewal_date:null}); });
+        if(oneTime&&Number(ld.est_value)>0){
+          chain=chain.then(function(){
+            var inv={client_id:r.id,month:thisMonth(),amount:Number(ld.est_value)||0,raised:true,paid_on:null};
+            return DB.insert("invoices",inv).then(function(ir){ S.invoices.push(ir||inv); });
+          });
+        }
       }
-    }).then(function(){ UI.tab="onboard"; render(); }),"Client created — finish the onboarding checklist");
+      return chain;
+    }).then(function(){ UI.tab="onboard"; render(); refreshGoal(); }),"Client created"+(oneTime?" — one-time invoice raised":"")+" — finish onboarding");
     return;
   }
   if(act==="alloc"){
@@ -1212,8 +1240,14 @@ document.addEventListener("change",function(ev){
     local(S.posts,v,pp2); render(); run(DB.update("posts",v,pp2)); return;
   }
   if(act==="lset"){
-    var lp={}; lp[f]=f==="est_value"?(Number(val)||0):(f==="next_date"&&!val?null:val);
+    var lp={};
+    if(f==="kind") lp.kind=(val==="One-time"?"one-time":"retainer");
+    else lp[f]=f==="est_value"?(Number(val)||0):(f==="next_date"&&!val?null:val);
     lp.updated_at=new Date().toISOString();
+    var ld2=byId(S.leads,v)||{};
+    var newKind=lp.kind!==undefined?lp.kind:ld2.kind;
+    var newEst=lp.est_value!==undefined?lp.est_value:ld2.est_value;
+    lp.goal_value=leadGoalValue(newKind,newEst);
     local(S.leads,v,lp); render(); run(DB.update("leads",v,lp).then(function(){ refreshGoal(); })); return;
   }
 });
@@ -1267,9 +1301,11 @@ document.addEventListener("submit",function(ev){
   }
   if(act==="addlead"){
     if(!d.name) return;
+    var lkind=(d.kind==="One-time")?"one-time":"retainer";
+    var lest=Number(d.est_value)||0;
     var ldw={name:d.name,contact_name:d.contact_name||"",contact_phone:d.contact_phone||"",source:d.source||"",
-             service:d.service||"",est_value:Number(d.est_value)||0,stage:"New",owner_name:d.owner_name||"",
-             next_date:d.next_date||null,notes:""};
+             service:d.service||"",kind:lkind,est_value:lest,goal_value:leadGoalValue(lkind,lest),
+             stage:"New",owner_name:d.owner_name||"",next_date:d.next_date||null,notes:""};
     el.reset(); run(DB.insert("leads",ldw).then(function(r){ S.leads.push(r||ldw); render(); refreshGoal(); })); return;
   }
   if(act==="addperson"){
