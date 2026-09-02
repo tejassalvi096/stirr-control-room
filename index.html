@@ -415,7 +415,7 @@ function dueOn(r,dateStr){
   }
   return false;
 }
-function doneRow(rid,date){ for(var i=0;i<S.recurDone.length;i++){ var x=S.recurDone[i]; if(x.recurring_id===rid&&x.date===date) return x; } return null; }
+function doneRow(rid,date,name){ for(var i=0;i<S.recurDone.length;i++){ var x=S.recurDone[i]; if(x.recurring_id===rid&&x.date===date&&(name===undefined||x.by_name===name)) return x; } return null; }
 function ownerSelect(sel,extra,attrs){
   var list=(extra||[]).concat(S.people.map(function(p){return p.name;}));
   return '<select '+(attrs||"")+'>'+list.map(function(n){return '<option'+(n===sel?" selected":"")+">"+esc(n)+"</option>";}).join("")+'</select>';
@@ -531,14 +531,18 @@ function yesterdayCard(){
   var rows=S.people.filter(function(p){return p.kind==="team";}).map(function(p){
     var done=S.tasks.filter(function(t){return t.owner_id===p.id&&t.done_at===y;}).length;
     var missed=S.tasks.filter(function(t){return t.owner_id===p.id&&isOpen(t)&&t.due&&t.due<=y;}).length;
-    return {n:p.name,d:done,m:missed};
-  }).sort(function(a,b){return b.d-a.d||a.m-b.m;});
-  var anyActivity=rows.some(function(r){return r.d||r.m;});
+    var rDue=S.recurring.filter(function(r){ return dueOn(r,y)&&(r.owner_name===p.name||r.owner_name==="Everyone"); });
+    var rDone=rDue.filter(function(r){ return doneRow(r.id,y,p.name); }).length;
+    return {n:p.name,d:done,m:missed,rd:rDone,rt:rDue.length,rm:rDue.length-rDone};
+  }).sort(function(a,b){return (b.d+b.rd)-(a.d+a.rd)||(a.m+a.rm)-(b.m+b.rm);});
+  var anyActivity=rows.some(function(r){return r.d||r.m||r.rd||r.rm;});
   return '<div class="sec"><div class="sec-head"><h2 class="h-sec">Yesterday</h2><span class="sub">'+fmtD(y)+' — same scoreboard for all four of us</span></div>'
-   +'<div class="card scroll"><table><thead><tr><th>Person</th><th class="right">Completed</th><th class="right">Overdue / missed</th><th></th></tr></thead><tbody>'
+   +'<div class="card scroll"><table><thead><tr><th>Person</th><th class="right">Tasks done</th><th class="right">Daily routine</th><th class="right">Overdue / missed</th><th></th></tr></thead><tbody>'
    + rows.map(function(r){
-      var flag=r.m>0?'<span class="chip red">needs attention</span>':(r.d>0?'<span class="chip green">on track</span>':'<span class="chip grey">no activity logged</span>');
+      var badRoutine=r.rt>0&&r.rm>0;
+      var flag=(r.m>0||badRoutine)?'<span class="chip red">needs attention</span>':((r.d>0||r.rd>0)?'<span class="chip green">on track</span>':'<span class="chip grey">nothing logged</span>');
       return '<tr><td><b>'+esc(r.n)+'</b></td><td class="right tnum">'+(r.d?'<span class="chip green">'+r.d+' ✓</span>':"0")+'</td>'
+       +'<td class="right tnum">'+(r.rt?'<span class="chip '+(r.rm===0?"green":r.rd?"amber":"red")+'">'+r.rd+"/"+r.rt+'</span>':'<span class="sub">—</span>')+'</td>'
        +'<td class="right tnum">'+(r.m?'<span class="chip red">'+r.m+'</span>':"0")+'</td><td class="right">'+flag+'</td></tr>';
      }).join("")
    +'</tbody></table>'+(anyActivity?"":'<div class="empty" style="padding:8px">No completions and no misses logged yesterday — if work happened, it is not on the board.</div>')+'</div></div>';
@@ -622,15 +626,31 @@ function viewToday(){
   var rec=S.recurring.filter(function(r){ return dueOn(r,t); })
                      .filter(function(r){ return !mine||r.owner_name===mine||r.owner_name==="Everyone"; })
                      .sort(function(a,b){ return (a.sort||0)-(b.sort||0); });
-  h+='<div class="sec"><div class="sec-head"><h2 class="h-sec">Today\'s routine</h2><span class="sub">yours and everyone\'s</span>'
-   +'<span class="spacer"></span><span class="eyebrow">'+DOW[new Date().getDay()]+" "+fmtD(t)+'</span></div><div class="card">'
+  var myDoneR=rec.filter(function(r){ return doneRow(r.id,t,mine); }).length;
+  h+='<div class="sec"><div class="sec-head"><h2 class="h-sec">Your daily routine</h2><span class="sub">tick each as you do it — this is what marks your daily tasks done</span>'
+   +'<span class="spacer"></span><span class="chip '+(rec.length&&myDoneR===rec.length?"green":"grey")+'">'+myDoneR+"/"+rec.length+' done</span></div><div class="card">'
    +(rec.length?rec.map(function(r){
-      var dr=doneRow(r.id,t);
+      var dr=doneRow(r.id,t,mine);
       return '<button class="check'+(dr?" done":"")+'" data-act="recur" data-v="'+r.id+'">'
         +'<span class="box">✓</span><span><span class="t">'+esc(r.title)+'</span><br><span class="m">'
-        +esc(r.owner_name)+" · "+esc(r.time_text||"—")+(dr?(" · done by "+esc(dr.by_name||"")):"")+'</span></span></button>';
+        +esc(r.owner_name)+" · "+esc(r.time_text||"—")+(dr?(" · you marked done "+fmtDT(dr.created_at)):"")+'</span></span></button>';
     }).join(""):'<div class="empty">Nothing scheduled today.</div>')
    +'</div></div>';
+
+  // accountability: everyone's daily routine, who is done
+  var tdow=new Date().getDay();
+  h+='<div class="sec"><div class="sec-head"><h2 class="h-sec">Daily routine — everyone</h2><span class="sub">who has finished their daily tasks today</span></div>'
+   +'<div class="card scroll"><table><thead><tr><th>Person</th><th class="right">Daily done</th><th></th></tr></thead><tbody>'
+   + S.people.filter(function(p){return p.kind==="team";}).map(function(p){
+      var due=S.recurring.filter(function(r){ return dueOn(r,t)&&(r.owner_name===p.name||r.owner_name==="Everyone"); });
+      var done=due.filter(function(r){ return doneRow(r.id,t,p.name); }).length;
+      var allDone=due.length&&done===due.length;
+      var pending=due.filter(function(r){ return !doneRow(r.id,t,p.name); });
+      return '<tr><td><b>'+esc(p.name)+'</b></td>'
+       +'<td class="right tnum"><span class="chip '+(allDone?"green":done?"amber":"grey")+'">'+done+"/"+due.length+'</span></td>'
+       +'<td class="sub" style="font-size:11px">'+(allDone?'<span class="chip green">all done ✓</span>':(pending.length?("pending: "+pending.slice(0,3).map(function(r){return esc(r.title.length>26?r.title.slice(0,24)+"…":r.title);}).join(", ")+(pending.length>3?(" +"+(pending.length-3)):"")):"—"))+'</td></tr>';
+    }).join("")
+   +'</tbody></table></div></div>';
 
   h+='<div class="sec"><div class="sec-head"><h2 class="h-sec">Who is loaded</h2><span class="sub">read this instead of asking</span></div>'
    +'<div class="card scroll"><table><thead><tr><th>Person</th><th class="right">Open</th><th class="right">Overdue</th><th class="right">Today</th><th class="right">Next 7d</th><th class="right">Waiting</th><th class="right">Stale</th></tr></thead><tbody>'
@@ -1021,7 +1041,7 @@ document.addEventListener("click",function(ev){
   if(act==="signout"){ DB.signOut().then(function(){ SESSION=null; ME=null; render(); }); return; }
   if(act==="recur"){
     ev.preventDefault();
-    var t=today(), dr=doneRow(v,t);
+    var t=today(), dr=doneRow(v,t,myName());
     if(dr){ S.recurDone=S.recurDone.filter(function(x){return x.id!==dr.id;}); render(); run(DB.remove("recur_done",dr.id)); }
     else { var row={recurring_id:v,date:t,by_name:myName()}; run(DB.insert("recur_done",row).then(function(r){ S.recurDone.push(r||row); render(); })); }
     return;
