@@ -246,6 +246,10 @@ function thisMonth(){var d=new Date();return d.getFullYear()+"-"+pad(d.getMonth(
 function parseISO(s){var p=String(s||"").split("-");return new Date(+p[0],(+p[1])-1,+p[2]);}
 function addDays(s,n){var d=parseISO(s);d.setDate(d.getDate()+n);return iso(d);}
 function fmtD(s){if(!s)return "—";var d=parseISO(s);return d.getDate()+" "+["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()];}
+function ord(n){var v=n%100;return n+((v>=11&&v<=13)?"th":(["th","st","nd","rd"][n%10]||"th"));}
+function fmtDord(s){if(!s)return "—";var d=parseISO(s);return ord(d.getDate())+" "+["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()];}
+function wdayShort(s){if(!s)return "";var d=parseISO(s);return ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getDay()];}
+function wdayFull(s){if(!s)return "";var d=parseISO(s);return ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][d.getDay()];}
 function money(n){n=Number(n)||0;return "₹"+n.toLocaleString("en-IN");}
 function byId(a,id){for(var i=0;i<a.length;i++)if(a[i].id===id)return a[i];return null;}
 function sum(a,k){return a.reduce(function(s,x){return s+(Number(x[k])||0);},0);}
@@ -906,9 +910,13 @@ function postEditor(){
   return '<div class="card" style="border-color:var(--purple)"><div class="card-head"><h3>Edit post</h3><span class="sub">changes save as you type</span><span class="spacer"></span><button class="btn ghost sm" data-act="closepost">Close</button></div><div class="card-body">'
    +'<div class="grid g2">'
    +'<div class="field" style="grid-column:1/-1"><label>Idea / caption</label><input type="text" data-act="postset" data-f="title" data-v="'+p.id+'" value="'+esc(p.title)+'"></div>'
-   +'<div class="field"><label>Date</label><input type="date" data-act="postset" data-f="date" data-v="'+p.id+'" value="'+esc(p.date)+'"></div>'
+   +'<div class="field"><label>Date <span class="sub" style="font-weight:400">'+(p.date?esc(fmtDord(p.date)+" · "+wdayFull(p.date)):"")+'</span></label><input type="date" data-act="postset" data-f="date" data-v="'+p.id+'" value="'+esc(p.date)+'"></div>'
    +'<div class="field"><label>Type</label><select data-act="postset" data-f="type" data-v="'+p.id+'">'+selOpts(["Reel","Static","Carousel","Story","Video","Blog","Post"],p.type)+'</select></div>'
    +'<div class="field"><label>Owner</label>'+ownerSelect(p.owner_name,[],'data-act="postset" data-f="owner_name" data-v="'+p.id+'"')+'</div>'
+   +'<div class="field"><label>Content link</label><input type="url" placeholder="final creative / drive link" data-act="postset" data-f="content_link" data-v="'+p.id+'" value="'+esc(p.content_link||"")+'"></div>'
+   +'<div class="field"><label>Reference link</label><input type="url" placeholder="reference / inspiration" data-act="postset" data-f="reference_link" data-v="'+p.id+'" value="'+esc(p.reference_link||"")+'"></div>'
+   +'<div class="field" style="grid-column:1/-1"><label>Remarks</label><input type="text" placeholder="notes for the team / client (shoot needed, client to confirm…)" data-act="postset" data-f="remarks" data-v="'+p.id+'" value="'+esc(p.remarks||"")+'"></div>'
+   +(p.content_link?'<div class="field" style="grid-column:1/-1"><a href="'+esc(p.content_link)+'" target="_blank" rel="noopener" class="btn ghost sm" style="text-decoration:none">↗ Open content link</a>'+(p.reference_link?' <a href="'+esc(p.reference_link)+'" target="_blank" rel="noopener" class="btn ghost sm" style="text-decoration:none">↗ Open reference</a>':"")+'</div>':(p.reference_link?'<div class="field" style="grid-column:1/-1"><a href="'+esc(p.reference_link)+'" target="_blank" rel="noopener" class="btn ghost sm" style="text-decoration:none">↗ Open reference</a></div>':""))
    +'</div>'
    +'<div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="eyebrow" style="margin-right:4px">Status</span>'
    + POST_STATUS.map(function(s){return '<button class="chip '+(s===p.status?(statusChip(s)||""):"grey")+'" data-act="poststatus" data-v="'+p.id+'" data-k="'+s+'"'+(s===p.status?' style="outline:2px solid var(--purple)"':"")+'>'+s+'</button>';}).join("")
@@ -948,8 +956,8 @@ function viewCalendar(){
   for(var i=0;i<lead;i++) h+='<div class="cell out"></div>';
   for(var d=1;d<=days;d++){
     var ds=mo+"-"+pad(d), dp=posts.filter(function(p){return p.date===ds;});
-    h+='<div class="cell'+(ds===today()?" tdy":"")+'"><div class="d">'+d+'</div>'
-     + dp.map(function(p){ return '<button class="post p-'+String(p.status).toLowerCase()+'" data-act="openpost" data-v="'+p.id+'" title="'+esc(p.type+" · "+(p.owner_name||"")+" · "+p.status)+'">'+esc(p.title)+'</button>'; }).join("")
+    h+='<div class="cell'+(ds===today()?" tdy":"")+'"><div class="d">'+d+' <span style="font-weight:400;color:#8a887f;font-size:10px">'+wdayShort(ds)+'</span></div>'
+     + dp.map(function(p){ return '<button class="post p-'+String(p.status).toLowerCase()+'" data-act="openpost" data-v="'+p.id+'" title="'+esc(p.type+" · "+(p.owner_name||"")+" · "+p.status+(p.remarks?(" · "+p.remarks):""))+'">'+(p.content_link?"🔗 ":"")+esc(p.title)+'</button>'; }).join("")
      +'</div>';
   }
   h+='</div></div></div>';
