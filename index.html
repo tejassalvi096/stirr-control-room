@@ -534,6 +534,24 @@ function parseCSVLine(line){
   }
   out.push(cur); return out;
 }
+function parseSheetDate(raw){
+  raw=String(raw||"").trim(); if(!raw) return "";
+  if(/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  var cm=UI.calMonth||thisMonth(), yr=cm.slice(0,4);
+  if(/^\d{1,2}$/.test(raw)) return cm+"-"+pad(Number(raw));
+  var m=raw.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/); if(m) return m[3]+"-"+pad(+m[2])+"-"+pad(+m[1]);
+  var mo={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12};
+  var t=raw.toLowerCase().replace(/(\d+)(st|nd|rd|th)/g,"$1");
+  var mm=t.match(/(\d{1,2})\s*[ ,\-]?\s*([a-z]+)/)||t.match(/([a-z]+)\s*[ ,\-]?\s*(\d{1,2})/);
+  if(mm){
+    var day,mon;
+    if(/^\d/.test(mm[1])){ day=+mm[1]; mon=mm[2]; } else { mon=mm[1]; day=+mm[2]; }
+    var mnum=mo[mon.slice(0,4)]||mo[mon.slice(0,3)];
+    var y2=(t.match(/(20\d{2})/)||[])[1]||yr;
+    if(mnum&&day>=1&&day<=31) return y2+"-"+pad(mnum)+"-"+pad(day);
+  }
+  return "";
+}
 function getSetting(k){ for(var i=0;i<S.settings.length;i++) if(S.settings[i].key===k) return S.settings[i].value; return null; }
 function monthsLeftInGoal(){
   var g=S.goal||{}; var ed=parseISO(g.end_date||"2026-12-31"); var now=new Date();
@@ -912,6 +930,7 @@ function postEditor(){
    +'<div class="field" style="grid-column:1/-1"><label>Idea / caption</label><input type="text" data-act="postset" data-f="title" data-v="'+p.id+'" value="'+esc(p.title)+'"></div>'
    +'<div class="field"><label>Date <span class="sub" style="font-weight:400">'+(p.date?esc(fmtDord(p.date)+" · "+wdayFull(p.date)):"")+'</span></label><input type="date" data-act="postset" data-f="date" data-v="'+p.id+'" value="'+esc(p.date)+'"></div>'
    +'<div class="field"><label>Type</label><select data-act="postset" data-f="type" data-v="'+p.id+'">'+selOpts(["Reel","Static","Carousel","Story","Video","Blog","Post"],p.type)+'</select></div>'
+   +'<div class="field"><label>Product</label><input type="text" placeholder="which product / offering" data-act="postset" data-f="product" data-v="'+p.id+'" value="'+esc(p.product||"")+'"></div>'
    +'<div class="field"><label>Owner</label>'+ownerSelect(p.owner_name,[],'data-act="postset" data-f="owner_name" data-v="'+p.id+'"')+'</div>'
    +'<div class="field"><label>Content link</label><input type="url" placeholder="final creative / drive link" data-act="postset" data-f="content_link" data-v="'+p.id+'" value="'+esc(p.content_link||"")+'"></div>'
    +'<div class="field"><label>Reference link</label><input type="url" placeholder="reference / inspiration" data-act="postset" data-f="reference_link" data-v="'+p.id+'" value="'+esc(p.reference_link||"")+'"></div>'
@@ -957,7 +976,7 @@ function viewCalendar(){
   for(var d=1;d<=days;d++){
     var ds=mo+"-"+pad(d), dp=posts.filter(function(p){return p.date===ds;});
     h+='<div class="cell'+(ds===today()?" tdy":"")+'"><div class="d">'+d+' <span style="font-weight:400;color:#8a887f;font-size:10px">'+wdayShort(ds)+'</span></div>'
-     + dp.map(function(p){ return '<button class="post p-'+String(p.status).toLowerCase()+'" data-act="openpost" data-v="'+p.id+'" title="'+esc(p.type+" · "+(p.owner_name||"")+" · "+p.status+(p.remarks?(" · "+p.remarks):""))+'">'+(p.content_link?"🔗 ":"")+esc(p.title)+'</button>'; }).join("")
+     + dp.map(function(p){ return '<button class="post p-'+String(p.status).toLowerCase()+'" data-act="openpost" data-v="'+p.id+'" title="'+esc(p.type+(p.product?(" · "+p.product):"")+" · "+(p.owner_name||"")+" · "+p.status+(p.remarks?(" · "+p.remarks):""))+'">'+(p.content_link?"🔗 ":"")+esc(p.title)+'</button>'; }).join("")
      +'</div>';
   }
   h+='</div></div></div>';
@@ -965,6 +984,7 @@ function viewCalendar(){
   h+='<div style="height:14px"></div><div class="card"><div class="card-head"><h3>Add one post</h3></div><div class="card-body"><form class="inline-form" data-act="addpost">'
    +'<div class="field" style="flex:0 0 140px"><label>Date</label><input type="date" name="date" value="'+mo+'-'+pad(Math.min(new Date().getDate(),days))+'" required></div>'
    +'<div class="field" style="flex:0 0 120px"><label>Type</label><select name="type">'+selOpts(["Reel","Static","Carousel","Story","Video","Blog"],"Reel")+'</select></div>'
+   +'<div class="field" style="flex:1 1 130px"><label>Product</label><input type="text" name="product" placeholder="optional"></div>'
    +'<div class="field" style="flex:2 1 200px"><label>Idea / caption</label><input type="text" name="title" required></div>'
    +'<div class="field"><label>Owner</label>'+ownerSelect(myName(),[],'name="owner_name"')+'</div>'
    +'<button class="btn" type="submit">Add</button></form></div></div>';
@@ -1129,20 +1149,24 @@ document.addEventListener("click",function(ev){
     fetch(toCSVUrl(surl2)).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.text(); })
     .then(function(text){
       var lines=text.split(/\r?\n/).filter(function(s){return s.trim();});
+      if(!lines.length){ toast("The sheet looks empty.",true); return; }
+      var norm=function(s){ return String(s||"").toLowerCase().replace(/[^a-z]/g,""); };
+      var hdr=parseCSVLine(lines[0]).map(norm);
+      var col=function(names){ for(var n=0;n<names.length;n++){ var i=hdr.indexOf(norm(names[n])); if(i>=0) return i; } return -1; };
+      var ci={date:col(["Date"]),type:col(["Type"]),product:col(["Product"]),title:col(["Idea / Caption","Idea/Caption","Idea","Caption"]),owner:col(["Owner"]),status:col(["Status"]),content:col(["Content Link","Content"]),ref:col(["Reference Link","Reference"]),remarks:col(["Remarks"])};
+      if(ci.date<0||ci.title<0){ toast("Couldn't find the Date and Idea/Caption columns — keep the header row on top of the tab.",true); return; }
+      var g=function(parts,i){ return i>=0?(parts[i]||"").trim():""; };
       var dup=0,rows=[];
-      lines.forEach(function(line){
+      lines.slice(1).forEach(function(line){
         var parts=parseCSVLine(line);
-        var raw=(parts[0]||"").trim(), date="";
-        if(/^\d{4}-\d{2}-\d{2}$/.test(raw)) date=raw;
-        else if(/^\d{1,2}$/.test(raw)) date=UI.calMonth+"-"+pad(Number(raw));
-        else if(/^\d{1,2}[-\/]\d{1,2}[-\/]\d{4}$/.test(raw)){ var q=raw.split(/[-\/]/); date=q[2]+"-"+pad(+q[1])+"-"+pad(+q[0]); }
-        else return;
-        var title=(parts[2]||parts[1]||"").trim(); if(!title) return;
+        var date=parseSheetDate(g(parts,ci.date)); if(!date) return;
+        var title=g(parts,ci.title); if(!title) return;
         var exists=S.posts.some(function(p){ return p.client_id===UI.calClient&&p.date===date&&p.title===title; });
         if(exists){ dup++; return; }
-        rows.push({client_id:UI.calClient,date:date,type:(parts[1]||"Post").trim()||"Post",title:title,owner_name:(parts[3]||"").trim(),status:"Idea"});
+        var st=g(parts,ci.status); if(POST_STATUS.indexOf(st)<0) st="Idea";
+        rows.push({client_id:UI.calClient,date:date,type:g(parts,ci.type)||"Post",product:g(parts,ci.product),title:title,owner_name:g(parts,ci.owner),status:st,content_link:g(parts,ci.content)||null,reference_link:g(parts,ci.ref)||null,remarks:g(parts,ci.remarks)||null});
       });
-      if(!rows.length){ toast(dup?("Nothing new — "+dup+" posts already on the calendar."):"No usable rows — check the link points to the published CSV of the right tab.",!dup); return; }
+      if(!rows.length){ toast(dup?("Nothing new — "+dup+" posts already on the calendar."):"No usable rows — check the link points to the right tab and keep the header row.",!dup); return; }
       run(Promise.all(rows.map(function(rw){return DB.insert("posts",rw);})).then(function(){ return refresh(); }),rows.length+" new posts synced from the sheet"+(dup?(", "+dup+" already there"):""));
     })
     .catch(function(e){ toast("Could not read the sheet — open Share and set it to 'Anyone with the link can view', then try again. ("+e.message+")",true); });
@@ -1323,7 +1347,7 @@ document.addEventListener("submit",function(ev){
   }
   if(act==="addpost"){
     if(!d.title) return;
-    var po={client_id:UI.calClient,date:d.date,type:d.type||"Reel",title:d.title,owner_name:d.owner_name||"",status:"Idea"};
+    var po={client_id:UI.calClient,date:d.date,type:d.type||"Reel",title:d.title,owner_name:d.owner_name||"",status:"Idea"}; if(d.product) po.product=d.product;
     el.reset(); run(DB.insert("posts",po).then(function(r){ S.posts.push(r||po); render(); })); return;
   }
   if(act==="paste"){
