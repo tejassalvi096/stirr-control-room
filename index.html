@@ -265,11 +265,11 @@ function toast(msg,bad){
 var CFG=window.STIRR_CONFIG||{};
 var DEMO=/[?&]demo=1/.test(location.search)||!CFG.url||CFG.url.indexOf("PASTE")===0;
 var sb=null;
-var S={profiles:[],people:[],clients:[],tasks:[],recurring:[],recurDone:[],posts:[],finance:[],invoices:[],expenses:[],leads:[],settings:[],goal:null,notes:[]};
+var S={profiles:[],people:[],clients:[],tasks:[],recurring:[],recurDone:[],posts:[],finance:[],invoices:[],expenses:[],leads:[],settings:[],goal:null,notes:[],agentActivity:[]};
 var ME=null, SESSION=null;
 
-var TABLES=["profiles","people","clients","tasks","recurring","recur_done","posts","client_finance","invoices","expenses","leads","settings","notes"];
-var KEYMAP={recur_done:"recurDone",client_finance:"finance"};
+var TABLES=["profiles","people","clients","tasks","recurring","recur_done","posts","client_finance","invoices","expenses","leads","settings","notes","agent_activity"];
+var KEYMAP={recur_done:"recurDone",client_finance:"finance",agent_activity:"agentActivity"};
 
 /* ---- demo (offline) backend so the app can be tried before Supabase ---- */
 var DEMO_DB=null;
@@ -762,6 +762,52 @@ function taskTable(list,compact){
     }).join("")+'</tbody></table></div>';
 }
 
+
+/* ---------------- AI team panel ---------------- */
+function aiPanel(){
+  var acts=(S.agentActivity||[]).slice().sort(function(a,b){return (b.created_at||"")<(a.created_at||"")?-1:1;});
+  var since=Date.now()-48*3600*1000;
+  var recent=acts.filter(function(a){return new Date(a.created_at).getTime()>since;});
+  var need=acts.filter(function(a){return a.needs_tejas;}).slice(0,8);
+  var byAgent={};
+  recent.forEach(function(a){ byAgent[a.agent]=(byAgent[a.agent]||0)+1; });
+  var aiLeads=S.leads.filter(function(l){return /AI Lead Gen|Meta Ads/.test(l.source||"");});
+  var esc2=function(a){return esc(a.agent)+" · "+esc(a.summary)+' <span class="sub">'+fmtDT(a.created_at)+"</span>";};
+  var h='<div class="card"><div class="card-head"><h3>AI team</h3><span class="sub">Lead Gen 9:30 · Sales 11:30/2:30/5:30 · Ads Mon/Thu · Ops Mon · brief 10:30 — last 48h</span></div><div class="card-body">';
+  h+='<div class="tiles">'
+   + tile(aiLeads.length,"AI-sourced leads","in the pipeline","")
+   + tile(recent.filter(function(a){return /^send_/.test(a.action);}).length,"Messages sent","emails + WhatsApps, 48h","")
+   + tile(recent.filter(function(a){return a.action==="reply_in"||a.action==="inbound";}).length,"Replies / inbound","waiting for you",recent.some(function(a){return a.action==="reply_in";})?"good":"")
+   + tile(need.length,"Needs Tejas","escalations open",need.length?"warn":"")
+   +'</div>';
+  if(need.length){ h+='<div style="margin-top:10px"><b>Needs you</b><ul style="margin:6px 0 0 18px;padding:0">'+need.map(function(a){return "<li>"+esc2(a)+"</li>";}).join("")+"</ul></div>"; }
+  h+='<details style="margin-top:10px"><summary class="sub" style="cursor:pointer">Activity log ('+recent.length+' in 48h · '+Object.keys(byAgent).map(function(k){return k+" "+byAgent[k];}).join(", ")+')</summary><ul style="margin:6px 0 0 18px;padding:0;max-height:260px;overflow:auto">'
+   + (recent.length?recent.slice(0,60).map(function(a){return "<li>"+esc2(a)+"</li>";}).join(""):'<li class="sub">No agent activity yet — the first runs are scheduled.</li>')
+   +'</ul></details></div></div><div style="height:14px"></div>';
+  return h;
+}
+function leadAI(l){
+  if(l.score==null && !l.email_draft && !l.why) return "";
+  var h='<div class="sub" style="margin-top:4px">';
+  if(l.score!=null) h+='<span class="chip'+(l.score>=70?" lime":"")+'" title="AI score">'+esc(l.score)+'</span> ';
+  if(l.segment) h+=esc(l.segment)+" · ";
+  if(l.city_area) h+=esc(l.city_area)+" · ";
+  if(l.email) h+='<a href="mailto:'+esc(l.email)+'">'+esc(l.email)+"</a> · ";
+  if(l.instagram) h+='<a href="https://instagram.com/'+esc(l.instagram)+'" target="_blank">@'+esc(l.instagram)+"</a> · ";
+  if(l.website) h+='<a href="'+esc(l.website)+'" target="_blank">site</a> · ';
+  if(l.followups_sent) h+=esc(l.followups_sent)+" touch"+(l.followups_sent>1?"es":"")+" · ";
+  if(l.needs_tejas) h+='<b style="color:var(--red)">needs Tejas: '+esc(l.next_action||"")+"</b> ";
+  h+="</div>";
+  if(l.why) h+='<div class="sub" style="margin-top:2px">'+esc(l.why)+"</div>";
+  if(l.email_draft||l.whatsapp_draft){
+    h+='<details style="margin-top:4px"><summary class="sub" style="cursor:pointer">AI drafts</summary>';
+    if(l.email_draft) h+='<div class="sub" style="white-space:pre-wrap;border-left:2px solid var(--line);padding:4px 8px;margin:4px 0"><b>Email</b><br>'+esc(l.email_draft.replace(/<[^>]+>/g,"").replace(/\n{3,}/g,"\n\n"))+"</div>";
+    if(l.whatsapp_draft) h+='<div class="sub" style="white-space:pre-wrap;border-left:2px solid var(--line);padding:4px 8px;margin:4px 0"><b>WhatsApp</b><br>'+esc(l.whatsapp_draft)+"</div>";
+    h+="</details>";
+  }
+  return h;
+}
+
 /* ---------------- leads ---------------- */
 function viewLeads(){
   var t=today();
@@ -770,6 +816,7 @@ function viewLeads(){
   var lost=S.leads.filter(function(l){return l.stage==="Lost";});
   var conv=(won.length+lost.length)?Math.round(won.length/(won.length+lost.length)*100):null;
   var h='<div class="sec-head"><h2 class="h-sec">Leads</h2><span class="sub">anyone can add a lead and move its stage — an enquiry not on this board does not exist</span></div>';
+  h+=aiPanel();
   var gval=function(l){ return Number(l.goal_value)||leadGoalValue(l.kind,l.est_value); };
   h+='<div class="tiles">'
    + tile(open.length,"Open leads","being worked right now","")
@@ -796,7 +843,7 @@ function viewLeads(){
     return '<div class="stage'+(st==="Won"?" stage-won":st==="Lost"?" stage-lost":"")+'"><h4>'+st+'</h4><div class="cnt">'+ls.length+' · '+money(ls.reduce(function(s,l){return s+gval(l);},0))+'</div>'
      + ls.map(function(l){
         var od=l.next_date&&l.next_date<t&&st!=="Won"&&st!=="Lost";
-        return '<div class="item">'+esc(l.name)
+        return '<div class="item">'+esc(l.name)+(l.score!=null?' <span class="sub">'+esc(l.score)+'</span>':"")+(l.needs_tejas?' <span style="color:var(--red)">●</span>':"")
          +'<div class="p">'+money(l.est_value)+(l.kind==="one-time"?" one-time":"/mo")+' · '+esc(l.owner_name||"no owner")+'</div>'
          +(l.next_date&&st!=="Won"&&st!=="Lost"?'<div class="p"'+(od?' style="color:var(--red);font-weight:700"':"")+'>follow up '+fmtD(l.next_date)+(od?" — overdue":"")+'</div>':"")
          +'</div>';
@@ -805,7 +852,7 @@ function viewLeads(){
   h+='<div style="height:14px"></div><div class="card scroll"><table><thead><tr><th>Lead</th><th>Stage</th><th>Type</th><th>Owner</th><th class="right">Value ₹</th><th>Next follow-up</th><th>Notes</th><th></th></tr></thead><tbody>'
    +(S.leads.length?S.leads.slice().sort(function(a,b){return LEAD_STAGES.indexOf(a.stage)-LEAD_STAGES.indexOf(b.stage)||(a.next_date||"9999")<(b.next_date||"9999")?-1:1;}).map(function(l){
       var od=l.next_date&&l.next_date<t&&l.stage!=="Won"&&l.stage!=="Lost";
-      return '<tr class="'+(od?"od":"")+'"><td><b>'+esc(l.name)+'</b><br><span class="sub">'+esc(l.contact_name||"")+(l.contact_phone?(" · "+esc(l.contact_phone)):"")+(l.source?(" · "+esc(l.source)):"")+(l.service?(" · "+esc(l.service)):"")+'</span></td>'
+      return '<tr class="'+(od?"od":"")+'"><td><b>'+esc(l.name)+'</b><br><span class="sub">'+esc(l.contact_name||"")+(l.contact_phone?(" · "+esc(l.contact_phone)):"")+(l.source?(" · "+esc(l.source)):"")+(l.service?(" · "+esc(l.service)):"")+'</span>'+leadAI(l)+'</td>'
        +'<td><select data-act="lset" data-f="stage" data-v="'+l.id+'">'+selOpts(LEAD_STAGES,l.stage)+'</select></td>'
        +'<td><select data-act="lset" data-f="kind" data-v="'+l.id+'">'+selOpts(["Retainer","One-time"],(l.kind==="one-time"?"One-time":"Retainer"))+'</select></td>'
        +'<td>'+ownerSelect(l.owner_name,[],'data-act="lset" data-f="owner_name" data-v="'+l.id+'"')+'</td>'
