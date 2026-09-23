@@ -268,8 +268,8 @@ var sb=null;
 var S={profiles:[],people:[],clients:[],tasks:[],recurring:[],recurDone:[],posts:[],finance:[],invoices:[],expenses:[],leads:[],settings:[],goal:null,notes:[],agentActivity:[]};
 var ME=null, SESSION=null;
 
-var TABLES=["profiles","people","clients","tasks","recurring","recur_done","posts","client_finance","invoices","expenses","leads","settings","notes","agent_activity"];
-var KEYMAP={recur_done:"recurDone",client_finance:"finance",agent_activity:"agentActivity"};
+var TABLES=["profiles","people","clients","tasks","recurring","recur_done","posts","client_finance","invoices","expenses","leads","settings","notes","agent_activity","post_metrics","kpi_targets"];
+var KEYMAP={recur_done:"recurDone",client_finance:"finance",agent_activity:"agentActivity",post_metrics:"postMetrics",kpi_targets:"kpiTargets"};
 
 /* ---- demo (offline) backend so the app can be tried before Supabase ---- */
 var DEMO_DB=null;
@@ -290,7 +290,7 @@ function demoSeed(){
      return {id:"r"+i,title:r[0],freq:r[1],day:r[2],owner_name:r[3],time_text:r[4],sort:i};
    });
   return {profiles:[{id:"u1",name:"Demo user",can_finance:true}],people:p,clients:[],tasks:[],
-          recurring:rec,recur_done:[],posts:[],client_finance:[],invoices:[],expenses:[],leads:[],
+          recurring:rec,recur_done:[],posts:[],client_finance:[],invoices:[],expenses:[],leads:[],post_metrics:[],kpi_targets:[],
           settings:[{key:"goal",value:{target:2500000,label:"Japan",start:"2026-09-01",end:"2026-12-31"}}],
           notes:[{id:"n1",to_name:"Tejas",from_name:"Claude",text:"This is what a note looks like — leave one for a teammate below.",read:false,created_at:new Date().toISOString()}]};
 }
@@ -338,7 +338,7 @@ var DB={
   },
   update:function(table,id,patch){
     if(DEMO){ var x=byId(DEMO_DB[table],id); if(x) Object.assign(x,patch); demoSave(); return Promise.resolve(x); }
-    return sb.from(table).update(patch).eq("id",id).then(function(r){ if(r.error) throw r.error; return r; });
+    return sb.from(table).update(patch).eq("id",id).select().then(function(r){ if(r.error) throw r.error; return (r.data&&r.data[0])||r; });
   },
   upsertSetting:function(key,value){
     if(DEMO){ var x=null; DEMO_DB.settings.forEach(function(s){ if(s.key===key) x=s; }); if(!x){ x={key:key,value:value}; DEMO_DB.settings.push(x); } else x.value=value; demoSave(); return Promise.resolve(x); }
@@ -435,7 +435,7 @@ function peopleSelect(selId,attrs,blank){
 }
 
 /* ============================================================ UI state */
-var UI={tab:"today",tWho:"all",tStatus:"open",tClient:"all",client:null,calClient:"",calMonth:"",monMonth:"",showPaste:false,addClient:false,post:null};
+var UI={tab:"today",perfMonth:"",tWho:"all",tStatus:"open",tClient:"all",client:null,calClient:"",calMonth:"",monMonth:"",showPaste:false,addClient:false,post:null};
 
 /* ============================================================ render */
 function render(){
@@ -449,6 +449,7 @@ function render(){
     : UI.tab==="onboard"?viewOnboard()
     : UI.tab==="calendar"?viewCalendar()
     : UI.tab==="money"?(financeOn()?viewMoney():'<div class="card"><div class="empty">The money section is limited to Tejas and Snehal.</div></div>')
+    : UI.tab==="perf"?viewPerf()
     : viewTeam();
   document.getElementById("view").innerHTML=(myPerson()?"":identifyCard())+v;
   document.getElementById("drawer-host").innerHTML=UI.client?drawer():"";
@@ -477,6 +478,7 @@ function loginView(err,msg){
 function shell(){
   var tabs=[["today","Today"],["tasks","Tasks"],["leads","Leads"],["clients","Clients"],["onboard","Onboarding"],["calendar","Calendar"]];
   if(financeOn()) tabs.push(["money","Money"]);
+  tabs.push(["perf","Performance"]);
   tabs.push(["team","Team"]);
   return '<div class="topbar"><div class="topbar-in">'
    +'<div class="brand">stirr<i></i> <span>control room</span></div><div class="spacer"></div>'
@@ -488,6 +490,150 @@ function shell(){
    +'</nav></div><main id="view"></main>';
 }
 function tile(v,k,n,cls){ return '<div class="tile '+(cls||"")+'"><div class="k">'+esc(k)+'</div><div class="v tnum">'+esc(v)+'</div><div class="n">'+esc(n)+'</div></div>'; }
+
+/* ---------------- performance / KPIs ---------------- */
+function isManager(){ return !!(ME&&(ME.is_manager||ME.can_finance)); }
+function monthDays(m){ var y=+m.slice(0,4),mo=+m.slice(5,7); return new Date(y,mo,0).getDate(); }
+function prevMonth(m){ var y=+m.slice(0,4),mo=+m.slice(5,7)-1; if(mo<1){mo=12;y--;} return y+"-"+pad(mo); }
+function nextMonth(m){ var y=+m.slice(0,4),mo=+m.slice(5,7)+1; if(mo>12){mo=1;y++;} return y+"-"+pad(mo); }
+function dstr(ts){ return ts?String(ts).slice(0,10):null; }
+function isDesignType(t){ t=String(t||"").toLowerCase(); return t==="static"||t==="carousel"||t==="creative"; }
+function isReel(t){ t=String(t||"").toLowerCase(); return t==="reel"||t==="video"; }
+function clientFollowers(cid,fallback){ var c=byId(S.clients,cid); return (c&&Number(c.ig_followers))||fallback||0; }
+function targetsFor(name){ return (S.kpiTargets||[]).filter(function(t){return t.person_name===name;}); }
+
+/* every KPI returns {value, of:"12 of 15", n:count-used} — value is null when there is nothing to measure yet */
+function kpiCalc(person, m){
+  var t=today(), first=m+"-01", last=m+"-"+pad(monthDays(m)), upto=(t<last?t:last);
+  var live=S.clients.filter(function(c){return c.status!=="Ended";});
+  var posts=S.posts.filter(function(p){ var d=String(p.date||""); return d>=first&&d<=last; });
+  var due=posts.filter(function(p){ return String(p.date)<=upto; });          // scheduled on or before today
+  var out={};
+  function pct(a,b){ return b?Math.round(a/b*100):null; }
+
+  // ---- Bhavana: calendar + posting
+  var cutoff=prevMonth(m)+"-25T23:59:59";
+  var ready=live.filter(function(c){
+    var quota=Number(c.posts_per_month)||12;
+    var n=posts.filter(function(p){ return p.client_id===c.id&&p.created_at&&String(p.created_at)<=cutoff; }).length;
+    return n>=quota;
+  }).length;
+  out.calendar_ready={value:pct(ready,live.length),of:ready+" of "+live.length+" clients ready by "+fmtD(prevMonth(m)+"-25")};
+
+  var onTime=due.filter(function(p){ return p.status==="Live"&&p.live_at&&dstr(p.live_at)<=String(p.date); }).length;
+  out.posts_on_time={value:pct(onTime,due.length),of:onTime+" of "+due.length+" scheduled posts"};
+  var liveN=due.filter(function(p){ return p.status==="Live"; }).length;
+  out.posts_delivered={value:pct(liveN,due.length),of:liveN+" live of "+due.length+" due so far"};
+
+  // ---- Bhavana: Instagram performance (scraped)
+  var met=(S.postMetrics||[]).filter(function(x){ var d=dstr(x.posted_at); return d&&d>=first&&d<=last; });
+  var viral=met.filter(function(x){ var f=x.followers_at||clientFollowers(x.client_id); return f&&Number(x.views)>=5*f; });
+  out.viral_posts={value:met.length?viral.length:null,of:viral.length+" of "+met.length+" posts hit 5× followers",unit:"posts"};
+  var reels=met.filter(function(x){ var f=x.followers_at||clientFollowers(x.client_id); return f&&x.views!=null&&/reel|video/i.test(x.ig_type||""); });
+  var rm=reels.length?reels.reduce(function(s,x){ return s+Number(x.views)/(x.followers_at||clientFollowers(x.client_id)); },0)/reels.length:null;
+  out.reach_multiple={value:rm==null?null:Math.round(rm*100)/100,of:reels.length+" reels measured",unit:"×"};
+  var eng=met.filter(function(x){ var f=x.followers_at||clientFollowers(x.client_id); return f&&(x.likes!=null||x.comments!=null); });
+  var er=eng.length?eng.reduce(function(s,x){ return s+((Number(x.likes)||0)+(Number(x.comments)||0))/(x.followers_at||clientFollowers(x.client_id))*100; },0)/eng.length:null;
+  out.engagement_rate={value:er==null?null:Math.round(er*10)/10,of:eng.length+" posts measured"};
+
+  // ---- Shubham: design
+  var dPosts=due.filter(function(p){ return isDesignType(p.type); });
+  var dOn=dPosts.filter(function(p){ return p.designed_at&&dstr(p.designed_at)<=addDays(String(p.date),-2); }).length;
+  out.design_on_time={value:pct(dOn,dPosts.length),of:dOn+" of "+dPosts.length+" creatives ready 2 days early"};
+  var dDone=dPosts.filter(function(p){ return !!p.designed_at; }).length;
+  out.design_delivered={value:pct(dDone,dPosts.length),of:dDone+" designed of "+dPosts.length+" due so far"};
+
+  // ---- shared: tasks + routine (for this person)
+  var pid=pidByName(person);
+  var tk=S.tasks.filter(function(x){ return x.owner_id===pid&&x.due&&x.due>=first&&x.due<=upto; });
+  var tkOn=tk.filter(function(x){ return x.status==="Done"&&x.done_at&&dstr(x.done_at)<=x.due; }).length;
+  out.tasks_on_time={value:pct(tkOn,tk.length),of:tkOn+" of "+tk.length+" tasks due"};
+  var dueN=0,doneN=0;
+  for(var d=first; d<=upto; d=addDays(d,1)){
+    var dow=parseISO(d).getDay(); if(dow===0) continue;
+    S.recurring.forEach(function(r){
+      if(!(r.owner_name===person||r.owner_name==="Everyone")||!dueOn(r,d)) return;
+      dueN++; if(doneRow(r.id,d,person)) doneN++;
+    });
+  }
+  out.routine_done={value:pct(doneN,dueN),of:doneN+" of "+dueN+" routine items"};
+  return out;
+}
+function kpiScore(person,m){
+  var calc=kpiCalc(person,m), ts=targetsFor(person), got=0, wsum=0, rows=[];
+  ts.forEach(function(t){
+    var k=calc[t.kpi]; if(!k) return;
+    var v=k.value, tgt=Number(t.target), w=Number(t.weight)||1;
+    var ach=v==null?null:Math.min(100,Math.round(v/tgt*100));
+    if(ach!=null){ got+=ach*w; wsum+=w; }
+    rows.push({t:t,k:k,ach:ach});
+  });
+  return {score:wsum?Math.round(got/wsum):null,rows:rows};
+}
+function scoreChip(s){ if(s==null) return '<span class="chip grey">no data yet</span>'; return '<span class="chip '+(s>=85?"green":s>=60?"lime":"red")+'">'+s+' / 100</span>'; }
+function kpiCard(person,m){
+  var r=kpiScore(person,m), pm=prevMonth(m), rp=kpiScore(person,pm);
+  var h='<div class="card" style="margin-bottom:14px"><div class="card-head"><h3>'+esc(person)+'</h3><span class="sub">'+esc(monthLabel(m))+'</span><span class="spacer"></span>'
+   +'<span class="sub">last month '+ (rp.score==null?"—":rp.score) +'</span>'+scoreChip(r.score)+'</div>';
+  if(!r.rows.length) return h+'<div class="empty">No KPIs set for '+esc(person)+' yet.</div></div>';
+  h+='<div class="scroll"><table><thead><tr><th>KPI</th><th class="right">This month</th><th class="right">Target</th><th class="right">Last month</th><th style="width:34%">How it is counted</th></tr></thead><tbody>';
+  r.rows.forEach(function(x){
+    var v=x.k.value, u=x.t.unit||"%", prev=(rp.rows.filter(function(y){return y.t.kpi===x.t.kpi;})[0]||{}).k;
+    var cls=x.ach==null?"":(x.ach>=100?"green":x.ach>=70?"lime":"red");
+    h+='<tr><td><b>'+esc(x.t.label)+'</b><div class="sub">'+esc(x.k.of)+'</div></td>'
+     +'<td class="right tnum">'+(v==null?'<span class="sub">no data</span>':'<span class="chip '+cls+'">'+v+(u==="%"?"%":" "+u)+'</span>')+'</td>'
+     +'<td class="right tnum">'+x.t.target+(u==="%"?"%":" "+u)+'</td>'
+     +'<td class="right tnum sub">'+(prev&&prev.value!=null?prev.value+(u==="%"?"%":""):"—")+'</td>'
+     +'<td class="sub">'+esc(x.t.note||"")+'</td></tr>';
+  });
+  return h+'</tbody></table></div></div>';
+}
+function clientPerfTable(m){
+  var first=m+"-01", last=m+"-"+pad(monthDays(m)), t=today(), upto=(t<last?t:last);
+  var h='<div class="card"><div class="card-head"><h3>Per client</h3><span class="sub">'+esc(monthLabel(m))+' — the calendar vs what actually went live, and how Instagram responded</span></div>'
+   +'<div class="scroll"><table><thead><tr><th>Client</th><th>Instagram</th><th class="right">Followers</th><th class="right">Planned</th><th class="right">Live</th><th class="right">On time</th><th class="right">Viral</th><th class="right">Avg reel ×</th></tr></thead><tbody>';
+  S.clients.filter(function(c){return c.status!=="Ended";}).forEach(function(c){
+    var ps=S.posts.filter(function(p){ return p.client_id===c.id&&String(p.date)>=first&&String(p.date)<=last; });
+    var due=ps.filter(function(p){return String(p.date)<=upto;});
+    var lv=due.filter(function(p){return p.status==="Live";}).length;
+    var on=due.filter(function(p){return p.status==="Live"&&p.live_at&&dstr(p.live_at)<=String(p.date);}).length;
+    var met=(S.postMetrics||[]).filter(function(x){ var d=dstr(x.posted_at); return x.client_id===c.id&&d&&d>=first&&d<=last; });
+    var f=Number(c.ig_followers)||0;
+    var viral=met.filter(function(x){ var ff=x.followers_at||f; return ff&&Number(x.views)>=5*ff; }).length;
+    var reels=met.filter(function(x){ return /reel|video/i.test(x.ig_type||"")&&x.views!=null&&(x.followers_at||f); });
+    var rm=reels.length?Math.round(reels.reduce(function(s,x){return s+Number(x.views)/(x.followers_at||f);},0)/reels.length*100)/100:null;
+    h+='<tr><td><b>'+esc(c.name)+'</b></td>'
+     +'<td>'+(isManager()?'<input type="text" data-act="cset" data-f="instagram" data-v="'+c.id+'" value="'+esc(c.instagram||"")+'" placeholder="handle" style="width:150px">':esc(c.instagram||"—"))+'</td>'
+     +'<td class="right tnum">'+(f?f.toLocaleString("en-IN"):"—")+'</td>'
+     +'<td class="right tnum">'+ps.length+(isManager()?' <span class="sub">/ quota <input type="number" min="0" data-act="cset" data-f="posts_per_month" data-v="'+c.id+'" value="'+(c.posts_per_month==null?12:c.posts_per_month)+'" style="width:52px"></span>':"")+'</td>'
+     +'<td class="right tnum">'+lv+'</td><td class="right tnum">'+(due.length?Math.round(on/due.length*100)+"%":"—")+'</td>'
+     +'<td class="right tnum">'+(met.length?viral:"—")+'</td><td class="right tnum">'+(rm==null?"—":rm+"×")+'</td></tr>';
+  });
+  return h+'</tbody></table></div></div>';
+}
+function targetsEditor(){
+  var h='<div class="card" style="margin-top:14px"><div class="card-head"><h3>Targets</h3><span class="sub">edit the number and it saves — Bhavana and Shubham see these on their own page</span></div><div class="scroll"><table><thead><tr><th>Person</th><th>KPI</th><th class="right">Target</th><th class="right">Weight</th></tr></thead><tbody>';
+  (S.kpiTargets||[]).slice().sort(function(a,b){return a.person_name<b.person_name?-1:a.person_name>b.person_name?1:(b.weight||0)-(a.weight||0);}).forEach(function(t){
+    h+='<tr><td>'+esc(t.person_name)+'</td><td>'+esc(t.label)+'</td>'
+     +'<td class="right"><input type="number" step="0.1" data-act="kset" data-f="target" data-v="'+t.id+'" value="'+t.target+'" style="width:70px;text-align:right"> '+esc(t.unit||"%")+'</td>'
+     +'<td class="right"><input type="number" min="1" max="5" data-act="kset" data-f="weight" data-v="'+t.id+'" value="'+(t.weight||1)+'" style="width:50px;text-align:right"></td></tr>';
+  });
+  return h+'</tbody></table></div></div>';
+}
+function viewPerf(){
+  var m=UI.perfMonth||thisMonth(), me=myPerson(), mgr=isManager();
+  var h='<div class="sec-head"><h2 class="h-sec">Performance</h2><span class="sub">'+(mgr?"scorecards for the team — same numbers they see":"your scorecard — the same numbers Tejas and Snehal see")+'</span>'
+   +'<span class="spacer"></span><input type="month" data-act="perfmonth" value="'+m+'"></div>';
+  h+='<div class="card" style="margin-bottom:14px"><div class="card-body sub">Rules: a post counts as <b>live</b> only when it is marked Live on the calendar with its link, by 11:59 pm on its scheduled date. '
+   +'A post is <b>viral</b> when its views reach 5× the client\'s followers. Instagram numbers are pulled automatically every Monday from the clients\' public profiles. '
+   +'The calendar KPI checks whether next month\'s posts were entered by the 25th. Score = how much of each target was reached, weighted. <b>Scoring starts 1 October</b> — September is the baseline.</div></div>';
+  var people=mgr?S.people.filter(function(p){return p.kind==="team"&&targetsFor(p.name).length;}):(me&&targetsFor(me.name).length?[me]:[]);
+  if(!people.length) h+='<div class="card"><div class="empty">'+(mgr?"No KPIs set yet.":"No KPIs are set for you yet — Tejas sets them on this page.")+'</div></div>';
+  people.forEach(function(p){ h+=kpiCard(p.name,m); });
+  if(mgr||(me&&me.name==="Bhavana")) h+=clientPerfTable(m);
+  if(mgr) h+=targetsEditor();
+  return h;
+}
 
 /* ---------------- today ---------------- */
 function weekStart(){var d=new Date();var day=(d.getDay()+6)%7;d.setDate(d.getDate()-day);return iso(d);}
@@ -1228,7 +1374,7 @@ document.addEventListener("click",function(ev){
   }
   if(act==="openpost"){ UI.post=v; render(); var ed=document.querySelector('[data-act="closepost"]'); if(ed) ed.scrollIntoView({block:"nearest"}); return; }
   if(act==="closepost"){ UI.post=null; render(); return; }
-  if(act==="poststatus"){ var pz=byId(S.posts,v); if(!pz) return; pz.status=k; render(); run(DB.update("posts",v,{status:k})); return; }
+  if(act==="poststatus"){ var pz=byId(S.posts,v); if(!pz) return; pz.status=k; if(k==="Live"&&!pz.live_at) pz.live_at=new Date().toISOString(); render(); run(DB.update("posts",v,{status:k,status_by:myName()||null}).then(function(r){ if(r&&r.live_at!==undefined) Object.assign(pz,{live_at:r.live_at,designed_at:r.designed_at}); })); return; }
   if(act==="delpost"){
     if(!confirm("Delete this post?")) return;
     S.posts=S.posts.filter(function(x){return x.id!==v;}); UI.post=null; render(); run(DB.remove("posts",v)); return;
@@ -1291,6 +1437,8 @@ document.addEventListener("change",function(ev){
   if(act==="calclient"){ UI.calClient=val; render(); return; }
   if(act==="calmonth"){ UI.calMonth=val||thisMonth(); render(); return; }
   if(act==="monmonth"){ UI.monMonth=val||thisMonth(); render(); return; }
+  if(act==="perfmonth"){ UI.perfMonth=val||thisMonth(); render(); return; }
+  if(act==="kset"){ var kp={}; kp[f]=Number(val)||0; local(S.kpiTargets,v,kp); render(); run(DB.update("kpi_targets",v,kp)); return; }
   if(act==="tset"){
     var patch={}; patch[f]=(f==="owner_id"&&!val)?null:(f==="due"&&!val?null:val);
     if(f==="status"&&val==="Done") patch.done_at=today();
@@ -1304,7 +1452,7 @@ document.addEventListener("change",function(ev){
     return;
   }
   if(act==="cset"){
-    var cp={}; cp[f]=(f==="owner_id"&&!val)?null:(f==="invoice_day"?(Number(val)||1):(f==="start_date"&&!val?null:val));
+    var cp={}; cp[f]=(f==="owner_id"&&!val)?null:(f==="invoice_day"?(Number(val)||1):(f==="posts_per_month"?(Number(val)||0):(f==="instagram"?val.replace(/^@|\/$/g,"").replace(/^.*instagram\.com\//,"").trim():(f==="start_date"&&!val?null:val))));
     local(S.clients,v,cp); render(); run(DB.update("clients",v,cp)); return;
   }
   if(act==="fset"){
@@ -1315,8 +1463,8 @@ document.addEventListener("change",function(ev){
   if(act==="pset"){ var pp={}; pp[f]=val; local(S.people,v,pp); run(DB.update("people",v,pp)); return; }
   if(act==="postset"){
     if(f==="date"&&!val) return;
-    var pp2={}; pp2[f]=val;
-    local(S.posts,v,pp2); render(); run(DB.update("posts",v,pp2)); return;
+    var pp2={}; pp2[f]=val; if(f==="status") pp2.status_by=myName()||null;
+    local(S.posts,v,pp2); render(); run(DB.update("posts",v,pp2).then(function(r){ if(r&&r.live_at!==undefined) local(S.posts,v,{live_at:r.live_at,designed_at:r.designed_at}); })); return;
   }
   if(act==="lset"){
     var lp={};
