@@ -268,8 +268,8 @@ var sb=null;
 var S={profiles:[],people:[],clients:[],tasks:[],recurring:[],recurDone:[],posts:[],finance:[],invoices:[],expenses:[],leads:[],settings:[],goal:null,notes:[],agentActivity:[]};
 var ME=null, SESSION=null;
 
-var TABLES=["profiles","people","clients","tasks","recurring","recur_done","posts","client_finance","invoices","expenses","leads","settings","notes","agent_activity","post_metrics","kpi_targets"];
-var KEYMAP={recur_done:"recurDone",client_finance:"finance",agent_activity:"agentActivity",post_metrics:"postMetrics",kpi_targets:"kpiTargets"};
+var TABLES=["profiles","people","clients","tasks","recurring","recur_done","posts","client_finance","invoices","expenses","leads","settings","notes","agent_activity","post_metrics","kpi_targets","follower_history"];
+var KEYMAP={recur_done:"recurDone",client_finance:"finance",agent_activity:"agentActivity",post_metrics:"postMetrics",kpi_targets:"kpiTargets",follower_history:"followerHistory"};
 
 /* ---- demo (offline) backend so the app can be tried before Supabase ---- */
 var DEMO_DB=null;
@@ -290,7 +290,7 @@ function demoSeed(){
      return {id:"r"+i,title:r[0],freq:r[1],day:r[2],owner_name:r[3],time_text:r[4],sort:i};
    });
   return {profiles:[{id:"u1",name:"Demo user",can_finance:true}],people:p,clients:[],tasks:[],
-          recurring:rec,recur_done:[],posts:[],client_finance:[],invoices:[],expenses:[],leads:[],post_metrics:[],kpi_targets:[],
+          recurring:rec,recur_done:[],posts:[],client_finance:[],invoices:[],expenses:[],leads:[],post_metrics:[],kpi_targets:[],follower_history:[],
           settings:[{key:"goal",value:{target:2500000,label:"Japan",start:"2026-09-01",end:"2026-12-31"}}],
           notes:[{id:"n1",to_name:"Tejas",from_name:"Claude",text:"This is what a note looks like — leave one for a teammate below.",read:false,created_at:new Date().toISOString()}]};
 }
@@ -500,13 +500,32 @@ function dstr(ts){ return ts?String(ts).slice(0,10):null; }
 function isDesignType(t){ t=String(t||"").toLowerCase(); return t==="static"||t==="carousel"||t==="creative"; }
 function isReel(t){ t=String(t||"").toLowerCase(); return t==="reel"||t==="video"; }
 function clientFollowers(cid,fallback){ var c=byId(S.clients,cid); return (c&&Number(c.ig_followers))||fallback||0; }
+function followersAt(cid,dateStr){ // last snapshot on/before dateStr, else the earliest we have
+  var h=(S.followerHistory||[]).filter(function(x){return x.client_id===cid;}).sort(function(a,b){return a.date<b.date?-1:1;});
+  if(!h.length) return null; var hit=null; h.forEach(function(x){ if(x.date<=dateStr) hit=x; }); return (hit||h[0]).followers;
+}
+function followerGrowth(c,m){ // {start, now, pct, target, onTrack}
+  var first=m+"-01", last=m+"-"+pad(monthDays(m)), t=today(), upto=(t<last?t:last);
+  var f0=followersAt(c.id,first), f=Number(c.ig_followers)||followersAt(c.id,upto);
+  var frac=(parseISO(upto)-parseISO(first))/(parseISO(last)-parseISO(first)||1);
+  var tgt=c.follower_target_pct==null?5:Number(c.follower_target_pct);
+  var pct=(f0&&f)?Math.round((f-f0)/f0*1000)/10:null;
+  return {start:f0,now:f,pct:pct,target:tgt,frac:frac,onTrack:pct==null?null:pct>=tgt*frac};
+}
+function socialClient(c){ return (c.service_type||"social")!=="video"; }
+function smmOwner(c){ return c.smm_owner===null?null:(c.smm_owner||"Bhavana"); }
+function kpiClients(person){ // which clients a person's KPIs are measured on
+  var live=S.clients.filter(function(c){return c.status!=="Ended";});
+  if(person==="Shubham") return live;                                   // design work counts for every client
+  return live.filter(function(c){ return socialClient(c)&&smmOwner(c)===person; });
+}
 function targetsFor(name){ return (S.kpiTargets||[]).filter(function(t){return t.person_name===name;}); }
 
 /* every KPI returns {value, of:"12 of 15", n:count-used} — value is null when there is nothing to measure yet */
 function kpiCalc(person, m){
   var t=today(), first=m+"-01", last=m+"-"+pad(monthDays(m)), upto=(t<last?t:last);
-  var live=S.clients.filter(function(c){return c.status!=="Ended";});
-  var posts=S.posts.filter(function(p){ var d=String(p.date||""); return d>=first&&d<=last; });
+  var live=kpiClients(person), scope={}; live.forEach(function(c){ scope[c.id]=true; });
+  var posts=S.posts.filter(function(p){ var d=String(p.date||""); return scope[p.client_id]&&d>=first&&d<=last; });
   var due=posts.filter(function(p){ return String(p.date)<=upto; });          // scheduled on or before today
   var out={};
   function pct(a,b){ return b?Math.round(a/b*100):null; }
@@ -525,8 +544,13 @@ function kpiCalc(person, m){
   var liveN=due.filter(function(p){ return p.status==="Live"; }).length;
   out.posts_delivered={value:pct(liveN,due.length),of:liveN+" live of "+due.length+" due so far"};
 
+  // ---- Bhavana: follower growth (clients on track for their monthly target, pro-rated to today)
+  var fgAll=live.filter(function(c){return c.instagram;}).map(function(c){return followerGrowth(c,m);}).filter(function(g){return g.onTrack!=null;});
+  var fgOn=fgAll.filter(function(g){return g.onTrack;}).length;
+  out.follower_growth={value:pct(fgOn,fgAll.length),of:fgOn+" of "+fgAll.length+" client accounts on track"};
+
   // ---- Bhavana: Instagram performance (scraped)
-  var met=(S.postMetrics||[]).filter(function(x){ var d=dstr(x.posted_at); return d&&d>=first&&d<=last; });
+  var met=(S.postMetrics||[]).filter(function(x){ var d=dstr(x.posted_at); return scope[x.client_id]&&d&&d>=first&&d<=last; });
   var viral=met.filter(function(x){ var f=x.followers_at||clientFollowers(x.client_id); return f&&Number(x.views)>=5*f; });
   out.viral_posts={value:met.length?viral.length:null,of:viral.length+" of "+met.length+" posts hit 5× followers",unit:"posts"};
   var reels=met.filter(function(x){ var f=x.followers_at||clientFollowers(x.client_id); return f&&x.views!=null&&/reel|video/i.test(x.ig_type||""); });
@@ -591,7 +615,7 @@ function kpiCard(person,m){
 function clientPerfTable(m){
   var first=m+"-01", last=m+"-"+pad(monthDays(m)), t=today(), upto=(t<last?t:last);
   var h='<div class="card"><div class="card-head"><h3>Per client</h3><span class="sub">'+esc(monthLabel(m))+' — the calendar vs what actually went live, and how Instagram responded</span></div>'
-   +'<div class="scroll"><table><thead><tr><th>Client</th><th>Instagram</th><th class="right">Followers</th><th class="right">Planned</th><th class="right">Live</th><th class="right">On time</th><th class="right">Viral</th><th class="right">Avg reel ×</th></tr></thead><tbody>';
+   +'<div class="scroll"><table><thead><tr><th>Client</th><th>Handled by</th><th>Instagram</th><th class="right">Followers</th><th class="right">Growth this month</th><th class="right">Target</th><th class="right">Planned</th><th class="right">Live</th><th class="right">On time</th><th class="right">Viral</th><th class="right">Avg reel ×</th></tr></thead><tbody>';
   S.clients.filter(function(c){return c.status!=="Ended";}).forEach(function(c){
     var ps=S.posts.filter(function(p){ return p.client_id===c.id&&String(p.date)>=first&&String(p.date)<=last; });
     var due=ps.filter(function(p){return String(p.date)<=upto;});
@@ -602,9 +626,14 @@ function clientPerfTable(m){
     var viral=met.filter(function(x){ var ff=x.followers_at||f; return ff&&Number(x.views)>=5*ff; }).length;
     var reels=met.filter(function(x){ return /reel|video/i.test(x.ig_type||"")&&x.views!=null&&(x.followers_at||f); });
     var rm=reels.length?Math.round(reels.reduce(function(s,x){return s+Number(x.views)/(x.followers_at||f);},0)/reels.length*100)/100:null;
-    h+='<tr><td><b>'+esc(c.name)+'</b></td>'
+    h+='<tr><td><b>'+esc(c.name)+'</b>'+(socialClient(c)?"":' <span class="chip grey">video only</span>')+'</td>'
+     +'<td>'+(isManager()?'<select data-act="cset" data-f="service_type" data-v="'+c.id+'"><option value="social"'+(socialClient(c)?" selected":"")+'>Social</option><option value="video"'+(socialClient(c)?"":" selected")+'>Video only</option></select> '
+        +(socialClient(c)?'<select data-act="cset" data-f="smm_owner" data-v="'+c.id+'">'+["Bhavana","Tejas","Snehal"].map(function(n){return '<option'+(smmOwner(c)===n?" selected":"")+'>'+n+'</option>';}).join("")+'</select>':"")
+        :(socialClient(c)?esc(smmOwner(c)||"—"):"—"))+'</td>'
      +'<td>'+(isManager()?'<input type="text" data-act="cset" data-f="instagram" data-v="'+c.id+'" value="'+esc(c.instagram||"")+'" placeholder="handle" style="width:150px">':esc(c.instagram||"—"))+'</td>'
      +'<td class="right tnum">'+(f?f.toLocaleString("en-IN"):"—")+'</td>'
+     +(function(){ var g=followerGrowth(c,m); return '<td class="right tnum">'+(g.pct==null?"—":'<span class="chip '+(g.onTrack?"green":"red")+'">'+(g.pct>0?"+":"")+g.pct+'%</span>'+(g.start?' <span class="sub">from '+g.start.toLocaleString("en-IN")+'</span>':""))+'</td>'
+       +'<td class="right tnum">'+(isManager()?'<input type="number" step="0.5" min="0" data-act="cset" data-f="follower_target_pct" data-v="'+c.id+'" value="'+g.target+'" style="width:56px;text-align:right">':g.target)+'% /mo</td>'; })()
      +'<td class="right tnum">'+ps.length+(isManager()?' <span class="sub">/ quota <input type="number" min="0" data-act="cset" data-f="posts_per_month" data-v="'+c.id+'" value="'+(c.posts_per_month==null?12:c.posts_per_month)+'" style="width:52px"></span>':"")+'</td>'
      +'<td class="right tnum">'+lv+'</td><td class="right tnum">'+(due.length?Math.round(on/due.length*100)+"%":"—")+'</td>'
      +'<td class="right tnum">'+(met.length?viral:"—")+'</td><td class="right tnum">'+(rm==null?"—":rm+"×")+'</td></tr>';
@@ -626,7 +655,7 @@ function viewPerf(){
    +'<span class="spacer"></span><input type="month" data-act="perfmonth" value="'+m+'"></div>';
   h+='<div class="card" style="margin-bottom:14px"><div class="card-body sub">Rules: a post counts as <b>live</b> only when it is marked Live on the calendar with its link, by 11:59 pm on its scheduled date. '
    +'A post is <b>viral</b> when its views reach 5× the client\'s followers. Instagram numbers are pulled automatically every Monday from the clients\' public profiles. '
-   +'The calendar KPI checks whether next month\'s posts were entered by the 25th. Score = how much of each target was reached, weighted. <b>Scoring starts 1 October</b> — September is the baseline.</div></div>';
+   +'The calendar KPI checks whether next month\'s posts were entered by the 25th. Each client has a handler — Bhavana\'s KPIs count only the clients she handles; video-only clients (no calendar) are excluded. Follower counts are snapshotted daily; each client has a monthly growth target (default 5%) and counts as on track when growth so far matches the share of the month gone by. Score = how much of each target was reached, weighted. <b>Scoring starts 1 October</b> — September is the baseline.</div></div>';
   var people=mgr?S.people.filter(function(p){return p.kind==="team"&&targetsFor(p.name).length;}):(me&&targetsFor(me.name).length?[me]:[]);
   if(!people.length) h+='<div class="card"><div class="empty">'+(mgr?"No KPIs set yet.":"No KPIs are set for you yet — Tejas sets them on this page.")+'</div></div>';
   people.forEach(function(p){ h+=kpiCard(p.name,m); });
@@ -1452,7 +1481,7 @@ document.addEventListener("change",function(ev){
     return;
   }
   if(act==="cset"){
-    var cp={}; cp[f]=(f==="owner_id"&&!val)?null:(f==="invoice_day"?(Number(val)||1):(f==="posts_per_month"?(Number(val)||0):(f==="instagram"?val.replace(/^@|\/$/g,"").replace(/^.*instagram\.com\//,"").trim():(f==="start_date"&&!val?null:val))));
+    var cp={}; cp[f]=(f==="owner_id"&&!val)?null:(f==="invoice_day"?(Number(val)||1):(f==="posts_per_month"||f==="follower_target_pct"?(Number(val)||0):(f==="instagram"?val.replace(/^@|\/$/g,"").replace(/^.*instagram\.com\//,"").trim():(f==="start_date"&&!val?null:val))));
     local(S.clients,v,cp); render(); run(DB.update("clients",v,cp)); return;
   }
   if(act==="fset"){
