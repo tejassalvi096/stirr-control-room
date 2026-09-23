@@ -1,0 +1,107 @@
+// Supabase Edge Function: WhatsApp Cloud API webhook receiver for Stirr Studio's AI agents.
+// GET  -> Meta verification handshake (hub.mode / hub.verify_token / hub.challenge)
+// POST -> message statuses (sent/delivered/read/failed) + inbound messages from prospects
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+
+const VERIFY_TOKEN = Deno.env.get("WA_VERIFY_TOKEN") ?? "stirr-ai-agents-2026";
+const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+function norm(p: string) { return (p || "").replace(/\D/g, ""); }
+
+Deno.serve(async (req) => {
+  const url = new URL(req.url);
+  if (req.method === "GET") {
+    if (url.searchParams.get("hub.mode") === "subscribe" && url.searchParams.get("hub.verify_token") === VERIFY_TOKEN) {
+      return new Response(url.searchParams.get("hub.challenge") ?? "", { status: 200 });
+    }
+    return new Response("forbidden", { status: 403 });
+  }
+  if (req.method !== "POST") return new Response("ok", { status: 200 });
+
+  const raw = await req.text();
+  // relay a copy to the previous webhook consumer (QPSIT inbox) so it keeps working; fire-and-forget
+  const RELAY = Deno.env.get("WA_RELAY_URL");
+  if (RELAY) {
+    fetch(RELAY, { method: "POST", headers: { "Content-Type": "application/json", "X-Hub-Signature-256": req.headers.get("X-Hub-Signature-256") ?? "" }, body: raw })
+      .catch((e) => console.error("relay failed", e));
+  }
+  let body: any;
+  try { body = JSON.parse(raw); } catch { return new Response("bad json", { status: 200 }); }
+
+  try {
+    for (const entry of body?.entry ?? []) {
+      for (const change of entry?.changes ?? []) {
+        const v = change?.value ?? {};
+
+        // ---- delivery statuses for messages we sent
+        for (const st of v.statuses ?? []) {
+          const status = st.status; // sent | delivered | read | failed
+          await sb.from("outreach_messages").update({ status }).eq("external_id", st.id);
+          if (status === "failed") {
+            const { data: m } = await sb.from("outreach_messages").select("lead_id").eq("external_id", st.id).maybeSingle();
+            await sb.from("agent_activity").insert({ agent: "Sales", action: "wa_failed", lead_id: m?.lead_id ?? null,
+              summary: `WhatsApp to ${st.recipient_id} failed: ${(st.errors ?? []).map((e: any) => e.title || e.message).join("; ").slice(0, 300)}`,
+              detail: st, needs_tejas: false });
+          }
+        }
+
+        // ---- inbound messages from prospects
+        const contacts: Record<string, string> = {};
+        for (const c of v.contacts ?? []) contacts[norm(c.wa_id)] = c?.profile?.name ?? "";
+        for (const msg of v.messages ?? []) {
+          const from = norm(msg.from);
+          let text = "";
+          if (msg.type === "text") text = msg.text?.body ?? "";
+          else if (msg.type === "button") text = msg.button?.text ?? "";
+          else if (msg.type === "interactive") text = msg.interactive?.button_reply?.title ?? msg.interactive?.list_reply?.title ?? "";
+          else text = `[${msg.type} message]`;
+
+          // dedupe on message id
+          const { data: dup } = await sb.from("outreach_messages").select("id").eq("external_id", msg.id).maybeSingle();
+          if (dup) continue;
+
+          // match lead by phone (last 10 digits)
+          const last10 = from.slice(-10);
+          const { data: leads } = await sb.from("leads").select("id,name,stage,contact_phone").like("contact_phone", `%${last10}`).limit(1);
+          const lead = leads?.[0] ?? null;
+
+          await sb.from("outreach_messages").insert({ lead_id: lead?.id ?? null, channel: "whatsapp", direction: "in",
+            subject: from, body: text, status: "received", external_id: msg.id });
+
+          // ---- team member replying to an AI note? (agent_config.team_phones = {"Bhavana": "9199...", ...})
+          const { data: cfg } = await sb.from("agent_config").select("value").eq("key", "team_phones").maybeSingle();
+          const phones: Record<string, string> = (cfg?.value as any) ?? {};
+          const member = Object.keys(phones).find((n) => String(phones[n]).slice(-10) === last10);
+          if (member) {
+            const { data: note } = await sb.from("notes").select("id").eq("to_name", member).eq("from_name", "AI Ops")
+              .is("reply", null).order("created_at", { ascending: false }).limit(1).maybeSingle();
+            if (note) await sb.from("notes").update({ reply: text.slice(0, 500), ack_at: new Date().toISOString(), read: true }).eq("id", note.id);
+            await sb.from("agent_activity").insert({ agent: "Ops", action: "team_reply", lead_id: null,
+              summary: `${member} replied on WhatsApp: ${text.slice(0, 200)}`, needs_tejas: false });
+            continue;
+          }
+
+          if (lead) {
+            const today = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+            const stop = /\b(stop|unsubscribe|remove|not interested|dont message|don't message)\b/i.test(text);
+            await sb.from("leads").update({
+              next_date: today,
+              next_action: stop ? "AI: opted out — no more messages" : "AI: WhatsApp reply received — respond",
+              stage: stop ? "Lost" : (lead.stage === "New" ? "Contacted" : lead.stage),
+              needs_tejas: false, updated_at: new Date().toISOString(),
+            }).eq("id", lead.id);
+            await sb.from("agent_activity").insert({ agent: "Sales", action: stop ? "wa_optout" : "reply_in", lead_id: lead.id,
+              summary: `${stop ? "Opt-out" : "WhatsApp reply"} from ${lead.name}: ${text.slice(0, 200)}`, needs_tejas: !stop });
+          } else {
+            await sb.from("agent_activity").insert({ agent: "Sales", action: "inbound", lead_id: null,
+              summary: `WhatsApp from unknown number ${from} (${contacts[from] || "no name"}): ${text.slice(0, 200)}`, needs_tejas: true });
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error("webhook error", e);
+  }
+  // Meta requires a fast 200 regardless
+  return new Response("ok", { status: 200 });
+});
