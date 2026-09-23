@@ -783,9 +783,12 @@ function notesCard(){
   if(mine.length){
     h+='<div class="card" style="border-color:var(--lime);margin-bottom:16px"><div class="card-head"><h3>For you</h3><span class="sub">'+mine.length+' note'+(mine.length>1?"s":"")+' from the team</span></div>';
     h+=mine.map(function(n){
+      var ai=/^AI /.test(n.from_name||"");
       return '<div class="note"><div class="note-text">'+esc(n.text)+'</div>'
         +'<div class="note-meta"><span>— '+esc(n.from_name||"someone")+', '+fmtD(String(n.created_at||"").slice(0,10))+'</span>'
-        +'<button class="chip lime" data-act="notedone" data-v="'+n.id+'">♥ Got it</button></div></div>';
+        +(ai?'<form class="inline-form" data-act="notereply" data-v="'+n.id+'" style="flex:1 1 260px;margin:0"><input type="text" name="reply" maxlength="200" placeholder="one line back — what you\'ll do / by when" required style="flex:1"><button class="btn sm" type="submit">Reply</button></form>'
+             :'<button class="chip lime" data-act="notedone" data-v="'+n.id+'">♥ Got it</button>')
+        +'</div></div>';
     }).join("");
     h+='</div>';
   }
@@ -1417,7 +1420,8 @@ document.addEventListener("click",function(ev){
   }
   if(act==="notedone"){
     var nt=byId(S.notes,v); if(!nt) return;
-    nt.read=true; render(); run(DB.update("notes",v,{read:true})); return;
+    var ack={read:true,ack_at:new Date().toISOString()};
+    Object.assign(nt,ack); render(); run(DB.update("notes",v,ack)); return;
   }
   if(act==="dellead"){
     if(!confirm("Delete this lead?")) return;
@@ -1512,6 +1516,11 @@ document.addEventListener("submit",function(ev){
   var el=ev.target.closest("form[data-act]"); if(!el) return;
   ev.preventDefault();
   var act=el.getAttribute("data-act"), v=el.getAttribute("data-v"), d=formData(el);
+  if(act==="notereply"){
+    var nr=byId(S.notes,v); if(!nr) return;
+    var patch={read:true,ack_at:new Date().toISOString(),reply:d.reply};
+    Object.assign(nr,patch); render(); run(DB.update("notes",v,patch),"Reply sent"); return;
+  }
 
   if(act==="login"){
     var btn=el.querySelector("button"); btn.disabled=true; btn.textContent="Signing in…";
