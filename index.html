@@ -109,6 +109,21 @@ td.right,th.right{text-align:right}
 .empty{padding:26px 14px;text-align:center;color:var(--muted);font-size:13px}
 
 .chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--purple-soft);color:var(--purple-ink);white-space:nowrap;border:0;letter-spacing:.01em}
+.pc-tbl td{vertical-align:middle;padding-top:12px;padding-bottom:12px}
+.pc-tbl .sub a{color:inherit;text-decoration:none} .pc-tbl .sub a:hover{text-decoration:underline}
+.pc-row{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.pc-bar{position:relative;height:5px;background:var(--line-soft);border-radius:99px;margin:7px 0 3px;max-width:180px}
+.pc-bar i{display:block;height:100%;border-radius:99px;background:var(--green)}
+.pc-bar i.amber{background:var(--amber)} .pc-bar i.red{background:var(--red)} .pc-bar i.green{background:var(--green)}
+.pc-bar em{position:absolute;top:-3px;width:2px;height:11px;background:var(--ink);opacity:.45;border-radius:1px}
+.pc-warn{color:var(--amber);font-weight:600}
+tr.pc-muted td{opacity:.6}
+.pc-foot{padding:10px 16px 14px;font-size:11.5px;border-top:1px solid var(--line-soft)}
+.pc-in{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:6px;padding:0 8px;background:var(--card)}
+.pc-in input{border:0!important;background:transparent!important;padding:6px 0!important;width:150px;box-shadow:none!important;outline:0}
+.pc-in.num input{width:46px;text-align:right}
+.pc-in span{color:var(--muted);font-size:12px;white-space:nowrap}
+.pc-edit select{min-width:110px}
 .chip.grey{background:var(--line-soft);color:var(--muted)}
 .chip.red{background:var(--red-soft);color:var(--red)}
 .chip.amber{background:var(--amber-soft);color:var(--amber)}
@@ -613,10 +628,26 @@ function kpiCard(person,m){
   return h+'</tbody></table></div></div>';
 }
 function clientPerfTable(m){
-  var first=m+"-01", last=m+"-"+pad(monthDays(m)), t=today(), upto=(t<last?t:last);
-  var h='<div class="card"><div class="card-head"><h3>Per client</h3><span class="sub">'+esc(monthLabel(m))+' — the calendar vs what actually went live, and how Instagram responded</span></div>'
-   +'<div class="scroll"><table><thead><tr><th>Client</th><th>Handled by</th><th>Instagram</th><th class="right">Followers</th><th class="right">Growth this month</th><th class="right">Target</th><th class="right">Planned</th><th class="right">Live</th><th class="right">On time</th><th class="right">Viral</th><th class="right">Avg reel ×</th></tr></thead><tbody>';
-  S.clients.filter(function(c){return c.status!=="Ended";}).forEach(function(c){
+  var first=m+"-01", last=m+"-"+pad(monthDays(m)), t=today(), upto=(t<last?t:last), mgr=isManager(), edit=mgr&&UI.perfEdit;
+  var cls=S.clients.filter(function(c){return c.status!=="Ended";}).sort(function(a,b){ return (socialClient(a)?0:1)-(socialClient(b)?0:1)||String(a.name).localeCompare(String(b.name)); });
+  var h='<div class="card pc-card"><div class="card-head"><h3>Per client</h3><span class="sub">'+esc(monthLabel(m))+(edit?' — settings':' — calendar vs what went live, and how Instagram responded')+'</span><span class="spacer"></span>'
+   +(mgr?'<button class="btn '+(edit?'':'ghost ')+'sm" data-act="perfedit">'+(edit?'Done':'Edit settings')+'</button>':'')+'</div>';
+  if(edit){
+    h+='<div class="scroll"><table class="pc-tbl pc-edit"><thead><tr><th>Client</th><th>Service</th><th>Handled by</th><th>Instagram handle</th><th class="right">Growth target</th><th class="right">Posts / month</th></tr></thead><tbody>';
+    cls.forEach(function(c){
+      var soc=socialClient(c);
+      h+='<tr><td><b>'+esc(c.name)+'</b></td>'
+       +'<td><select data-act="cset" data-f="service_type" data-v="'+c.id+'"><option value="social"'+(soc?" selected":"")+'>Social</option><option value="video"'+(soc?"":" selected")+'>Video only</option></select></td>'
+       +'<td>'+(soc?'<select data-act="cset" data-f="smm_owner" data-v="'+c.id+'">'+["Bhavana","Tejas","Snehal"].map(function(n){return '<option'+(smmOwner(c)===n?" selected":"")+'>'+n+'</option>';}).join("")+'</select>':'<span class="sub">—</span>')+'</td>'
+       +'<td><div class="pc-in"><span>@</span><input type="text" data-act="cset" data-f="instagram" data-v="'+c.id+'" value="'+esc(String(c.instagram||"").replace(/^@/,""))+'" placeholder="handle"></div></td>'
+       +'<td class="right"><div class="pc-in num"><input type="number" step="0.5" min="0" data-act="cset" data-f="follower_target_pct" data-v="'+c.id+'" value="'+(c.follower_target_pct==null?5:c.follower_target_pct)+'"><span>% / mo</span></div></td>'
+       +'<td class="right">'+(soc?'<div class="pc-in num"><input type="number" min="0" data-act="cset" data-f="posts_per_month" data-v="'+c.id+'" value="'+(c.posts_per_month==null?12:c.posts_per_month)+'"><span>posts</span></div>':'<span class="sub">—</span>')+'</td></tr>';
+    });
+    return h+'</tbody></table></div></div>';
+  }
+  h+='<div class="scroll"><table class="pc-tbl"><thead><tr><th>Client</th><th class="right">Followers</th><th style="min-width:150px">Growth vs target</th><th style="min-width:140px">Posts live</th><th class="right">On time</th><th class="right">Viral</th><th class="right">Avg reel</th></tr></thead><tbody>';
+  cls.forEach(function(c){
+    var soc=socialClient(c);
     var ps=S.posts.filter(function(p){ return p.client_id===c.id&&String(p.date)>=first&&String(p.date)<=last; });
     var due=ps.filter(function(p){return String(p.date)<=upto;});
     var lv=due.filter(function(p){return p.status==="Live";}).length;
@@ -626,19 +657,35 @@ function clientPerfTable(m){
     var viral=met.filter(function(x){ var ff=x.followers_at||f; return ff&&Number(x.views)>=5*ff; }).length;
     var reels=met.filter(function(x){ return /reel|video/i.test(x.ig_type||"")&&x.views!=null&&(x.followers_at||f); });
     var rm=reels.length?Math.round(reels.reduce(function(s,x){return s+Number(x.views)/(x.followers_at||f);},0)/reels.length*100)/100:null;
-    h+='<tr><td><b>'+esc(c.name)+'</b>'+(socialClient(c)?"":' <span class="chip grey">video only</span>')+'</td>'
-     +'<td>'+(isManager()?'<select data-act="cset" data-f="service_type" data-v="'+c.id+'"><option value="social"'+(socialClient(c)?" selected":"")+'>Social</option><option value="video"'+(socialClient(c)?"":" selected")+'>Video only</option></select> '
-        +(socialClient(c)?'<select data-act="cset" data-f="smm_owner" data-v="'+c.id+'">'+["Bhavana","Tejas","Snehal"].map(function(n){return '<option'+(smmOwner(c)===n?" selected":"")+'>'+n+'</option>';}).join("")+'</select>':"")
-        :(socialClient(c)?esc(smmOwner(c)||"—"):"—"))+'</td>'
-     +'<td>'+(isManager()?'<input type="text" data-act="cset" data-f="instagram" data-v="'+c.id+'" value="'+esc(c.instagram||"")+'" placeholder="handle" style="width:150px">':esc(c.instagram||"—"))+'</td>'
-     +'<td class="right tnum">'+(f?f.toLocaleString("en-IN"):"—")+'</td>'
-     +(function(){ var g=followerGrowth(c,m); return '<td class="right tnum">'+(g.pct==null?"—":'<span class="chip '+(g.onTrack?"green":"red")+'">'+(g.pct>0?"+":"")+g.pct+'%</span>'+(g.start?' <span class="sub">from '+g.start.toLocaleString("en-IN")+'</span>':""))+'</td>'
-       +'<td class="right tnum">'+(isManager()?'<input type="number" step="0.5" min="0" data-act="cset" data-f="follower_target_pct" data-v="'+c.id+'" value="'+g.target+'" style="width:56px;text-align:right">':g.target)+'% /mo</td>'; })()
-     +'<td class="right tnum">'+ps.length+(isManager()?' <span class="sub">/ quota <input type="number" min="0" data-act="cset" data-f="posts_per_month" data-v="'+c.id+'" value="'+(c.posts_per_month==null?12:c.posts_per_month)+'" style="width:52px"></span>':"")+'</td>'
-     +'<td class="right tnum">'+lv+'</td><td class="right tnum">'+(due.length?Math.round(on/due.length*100)+"%":"—")+'</td>'
-     +'<td class="right tnum">'+(met.length?viral:"—")+'</td><td class="right tnum">'+(rm==null?"—":rm+"×")+'</td></tr>';
+    var g=followerGrowth(c,m), handle=String(c.instagram||"").replace(/^@/,"");
+    var who=soc?(smmOwner(c)||"—"):"video only";
+    // client
+    h+='<tr'+(soc?'':' class="pc-muted"')+'><td><b>'+esc(c.name)+'</b><div class="sub">'
+     +(handle?'<a href="https://www.instagram.com/'+encodeURIComponent(handle)+'/" target="_blank" rel="noopener">@'+esc(handle)+'</a> · ':'')+esc(who)+'</div></td>';
+    // followers
+    h+='<td class="right tnum"><b>'+(f?f.toLocaleString("en-IN"):"—")+'</b>'+(g.start&&g.start!==f?'<div class="sub">from '+g.start.toLocaleString("en-IN")+'</div>':'')+'</td>';
+    // growth vs target
+    if(g.pct==null) h+='<td class="sub">no data yet</td>';
+    else {
+      var tone=g.pct<0?"red":(g.onTrack?"green":"amber");
+      var w=Math.max(0,Math.min(100,g.target?g.pct/g.target*100:0));
+      h+='<td><div class="pc-row"><span class="chip '+tone+'">'+(g.pct>0?"+":"")+g.pct+'%</span><span class="sub">of '+g.target+'%</span></div>'
+       +'<div class="pc-bar"><i class="'+tone+'" style="width:'+w+'%"></i><em style="left:'+Math.min(100,g.frac*100)+'%" title="where it should be today"></em></div></td>';
+    }
+    // posts
+    if(!soc) h+='<td class="sub">—</td><td class="right sub">—</td>';
+    else {
+      var quota=c.posts_per_month==null?12:Number(c.posts_per_month);
+      var pw=due.length?Math.round(lv/due.length*100):0;
+      var note=ps.length<quota?'<span class="pc-warn">'+(quota-ps.length)+' short of '+quota+'</span>':'quota '+quota;
+      h+='<td><div class="pc-row"><b class="tnum">'+lv+'</b><span class="sub">of '+due.length+' due · '+ps.length+' planned</span></div>'
+       +'<div class="pc-bar"><i class="'+(pw>=90?"green":pw>=60?"amber":"red")+'" style="width:'+pw+'%"></i></div><div class="sub" style="font-size:11px">'+note+'</div></td>'
+       +'<td class="right tnum">'+(due.length?'<span class="chip '+(on/due.length>=.9?"green":on/due.length>=.6?"amber":"red")+'">'+Math.round(on/due.length*100)+'%</span>':'<span class="sub">—</span>')+'</td>';
+    }
+    h+='<td class="right tnum">'+(met.length?viral:'<span class="sub">—</span>')+'</td><td class="right tnum">'+(rm==null?'<span class="sub">—</span>':rm+'×')+'</td></tr>';
   });
-  return h+'</tbody></table></div></div>';
+  h+='</tbody></table></div><div class="pc-foot sub">Growth bar: filled = progress to the monthly target, tick = where it should be today. Green on track · amber behind · red losing followers. A post counts as live only when it is marked Live on the Calendar.</div>';
+  return h+'</div>';
 }
 function targetsEditor(){
   var h='<div class="card" style="margin-top:14px"><div class="card-head"><h3>Targets</h3><span class="sub">edit the number and it saves — Bhavana and Shubham see these on their own page</span></div><div class="scroll"><table><thead><tr><th>Person</th><th>KPI</th><th class="right">Target</th><th class="right">Weight</th></tr></thead><tbody>';
@@ -1308,6 +1355,7 @@ document.addEventListener("click",function(ev){
     run(Promise.all([DB.update("people",v,{auth_id:ME.id}),DB.update("profiles",ME.id,{name:per.name})]),"You are set as "+per.name);
     return;
   }
+  if(act==="perfedit"){ UI.perfEdit=!UI.perfEdit; render(); return; }
   if(act==="signout"){ DB.signOut().then(function(){ SESSION=null; ME=null; render(); }); return; }
   if(act==="recur"){
     ev.preventDefault();
