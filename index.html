@@ -285,6 +285,15 @@ function fmtDord(s){if(!s)return "—";var d=parseISO(s);return ord(d.getDate())
 function wdayShort(s){if(!s)return "";var d=parseISO(s);return ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getDay()];}
 function wdayFull(s){if(!s)return "";var d=parseISO(s);return ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][d.getDay()];}
 function money(n){n=Number(n)||0;return "₹"+n.toLocaleString("en-IN");}
+var CURS=["INR","USD","GBP","AED","AUD"], CURSYM={INR:"₹",USD:"$",GBP:"£",AED:"AED ",AUD:"A$"};
+function curOf(cid){ var f=finRow(cid); return (f&&f.currency)||"INR"; }
+function fxRate(c){ if(!c||c==="INR") return 1; var fx=getSetting("fx")||{}; return Number(fx[c])||0; }
+function toINR(a,c){ return Math.round((Number(a)||0)*fxRate(c)); }
+function fmtC(a,c){ if(!c||c==="INR") return money(a); return (CURSYM[c]||c+" ")+(Number(a)||0).toLocaleString("en-IN"); }
+function hoursFor(cid,mo,pid){ return S.timeLogs.filter(function(x){ return (cid===undefined||x.client_id===cid)&&String(x.date).slice(0,7)===mo&&(!pid||x.person_id===pid); }).reduce(function(s,x){return s+(Number(x.hours)||0);},0); }
+var LOST_REASONS=["Price too high","Timing / not now","Chose another agency","Went in-house","No response","Not a fit","Budget cut","Other"];
+var HEALTH=["Happy","At risk","Upsell opportunity","Paused"];
+function healthChip(h){ return h==="At risk"?"red":h==="Upsell opportunity"?"lime":h==="Paused"?"grey":"green"; }
 function byId(a,id){for(var i=0;i<a.length;i++)if(a[i].id===id)return a[i];return null;}
 function sum(a,k){return a.reduce(function(s,x){return s+(Number(x[k])||0);},0);}
 function monthLabel(mo){var p=String(mo||"").split("-");return ["January","February","March","April","May","June","July","August","September","October","November","December"][(+p[1])-1]+" "+p[0];}
@@ -299,11 +308,11 @@ function toast(msg,bad){
 var CFG=window.STIRR_CONFIG||{};
 var DEMO=/[?&]demo=1/.test(location.search)||!CFG.url||CFG.url.indexOf("PASTE")===0;
 var sb=null;
-var S={profiles:[],people:[],clients:[],tasks:[],recurring:[],recurDone:[],posts:[],finance:[],invoices:[],expenses:[],leads:[],settings:[],goal:null,notes:[],agentActivity:[]};
+var S={profiles:[],people:[],clients:[],tasks:[],recurring:[],recurDone:[],posts:[],finance:[],invoices:[],expenses:[],leads:[],settings:[],goal:null,notes:[],agentActivity:[],overheads:[],payouts:[],timeLogs:[]};
 var ME=null, SESSION=null;
 
-var TABLES=["profiles","people","clients","tasks","recurring","recur_done","posts","client_finance","invoices","expenses","leads","settings","notes","agent_activity","post_metrics","kpi_targets","follower_history"];
-var KEYMAP={recur_done:"recurDone",client_finance:"finance",agent_activity:"agentActivity",post_metrics:"postMetrics",kpi_targets:"kpiTargets",follower_history:"followerHistory"};
+var TABLES=["profiles","people","clients","tasks","recurring","recur_done","posts","client_finance","invoices","expenses","leads","settings","notes","agent_activity","post_metrics","kpi_targets","follower_history","overheads","freelancer_payouts","time_logs"];
+var KEYMAP={recur_done:"recurDone",client_finance:"finance",agent_activity:"agentActivity",post_metrics:"postMetrics",kpi_targets:"kpiTargets",follower_history:"followerHistory",freelancer_payouts:"payouts",time_logs:"timeLogs"};
 
 /* ---- demo (offline) backend so the app can be tried before Supabase ---- */
 var DEMO_DB=null;
@@ -358,7 +367,7 @@ var DB={
     }
     return Promise.all(TABLES.map(function(t){
       return sb.from(t).select("*").then(function(r){
-        if(r.error){ if(t==="client_finance"||t==="invoices"||t==="expenses") return []; throw r.error; }
+        if(r.error){ if(t==="client_finance"||t==="invoices"||t==="expenses"||t==="overheads"||t==="freelancer_payouts"||t==="time_logs") return []; throw r.error; }
         var d=r.data||[];
         if(d.length<1000) return d;
         var out=[];
@@ -377,7 +386,7 @@ var DB={
     });
   },
   insert:function(table,row){
-    if(DEMO){ row=Object.assign({id:uid()},row); DEMO_DB[table].push(row); demoSave(); return Promise.resolve(row); }
+    if(DEMO){ row=Object.assign({id:uid()},row); (DEMO_DB[table]=DEMO_DB[table]||[]).push(row); demoSave(); return Promise.resolve(row); }
     return sb.from(table).insert(row).select().single().then(function(r){ if(r.error) throw r.error; return r.data; });
   },
   update:function(table,id,patch){
@@ -879,6 +888,19 @@ function notesCard(){
    +'<button class="btn sm" type="submit">Send</button></form></div></div>';
   return h;
 }
+function hoursCard(){
+  var pid=myPersonId(); if(!pid) return "";
+  var t=today(), mine=S.timeLogs.filter(function(x){return x.person_id===pid&&x.date===t;});
+  var tot=mine.reduce(function(s,x){return s+(Number(x.hours)||0);},0);
+  return '<details class="card" style="margin-bottom:18px"'+(tot?"":" open")+'><summary class="card-head" style="cursor:pointer"><h3>Log your hours</h3><span class="sub">'+(tot?("you logged "+tot+" h today"):"30 seconds at the end of the day — shows which clients eat the most time")+'</span></summary><div class="card-body">'
+   +'<form class="inline-form" data-act="addhours">'
+   +'<div class="field"><label>Client</label><select name="client_id"><option value="">— internal / studio —</option>'+S.clients.filter(function(c){return c.status!=="Ended";}).map(function(c){return '<option value="'+c.id+'">'+esc(c.name)+'</option>';}).join("")+'</select></div>'
+   +'<div class="field" style="flex:0 0 100px"><label>Hours</label><input type="number" name="hours" step="0.25" min="0.25" max="16" required></div>'
+   +'<div class="field" style="flex:2 1 180px"><label>What (optional)</label><input type="text" name="note" placeholder="e.g. 3 reels edited"></div>'
+   +'<button class="btn" type="submit">Log</button></form>'
+   +(mine.length?'<div style="margin-top:8px">'+mine.map(function(x){return '<div class="kv"><span>'+esc(clientName(x.client_id))+(x.note?" · "+esc(x.note):"")+'</span><span class="tnum">'+x.hours+' h <button class="icon-btn" data-act="delhours" data-v="'+x.id+'">✕</button></span></div>';}).join("")+'</div>':"")
+   +'</div></details>';
+}
 function myDayCard(){
   var pid=myPersonId(), nm=myName(); if(!pid&&!nm) return "";
   var t=today();
@@ -901,6 +923,7 @@ function viewToday(){
   var t=today(),h="";
   h+=helloCard();
   h+=myDayCard();
+  h+=hoursCard();
   h+=notesCard();
   h+=goalCard();
   h+=yesterdayCard();
@@ -1046,13 +1069,18 @@ function taskTable(list,compact){
       lg.forEach(function(n){ if(!started&&n.text==="In Progress") started=n; if(n.text==="Done") done=n; });
       var meta=(started?("▶ "+fmtDT(started.created_at)+(started.from_name?" ("+esc(started.from_name)+")":"")):"")
               +(done?((started?" · ":"")+"✓ "+fmtDT(done.created_at)):"");
-      return '<tr class="'+cls+'"><td><b>'+esc(t.title)+'</b>'+(meta?'<br><span class="sub" style="font-size:11px">'+meta+'</span>':"")+'</td><td>'+esc(clientName(t.client_id))+'</td>'
+      var more=UI.taskOpen===t.id;
+      return '<tr class="'+cls+'"><td><b>'+esc(t.title)+'</b> <button class="chip '+(t.notes||t.link?"blue":"grey")+'" data-act="taskopen" data-v="'+t.id+'" title="Brief, notes and link">'+(more?"▾":"▸")+(t.notes?" 📝":"")+(t.link?" 🔗":"")+(!t.notes&&!t.link?" brief":"")+'</button>'+(meta?'<br><span class="sub" style="font-size:11px">'+meta+'</span>':"")+'</td><td>'+esc(clientName(t.client_id))+'</td>'
        +'<td>'+peopleSelect(t.owner_id,'data-act="tset" data-f="owner_id" data-v="'+t.id+'"',true)+'</td>'
        +'<td><input type="date" data-act="tset" data-f="due" data-v="'+t.id+'" value="'+esc(t.due||"")+'" style="width:145px"></td>'
        +'<td><select data-act="tset" data-f="status" data-v="'+t.id+'">'+selOpts(TASK_STATUS,t.status)+'</select></td>'
        +(compact?"":'<td><select data-act="tset" data-f="priority" data-v="'+t.id+'">'+selOpts(PRIORITIES,t.priority||"P2")+'</select></td>')
        +'<td class="right" style="white-space:nowrap"><button class="chip grey" data-act="followup" data-v="'+t.id+'" title="Mark that you checked on this task today">'+(t.last_follow_up?("✓ checked "+fmtD(t.last_follow_up)):"check-in")+'</button> '
-       +'<button class="icon-btn" data-act="deltask" data-v="'+t.id+'">✕</button></td></tr>';
+       +'<button class="icon-btn" data-act="deltask" data-v="'+t.id+'">✕</button></td></tr>'
+       +(more?'<tr class="task-more"><td colspan="'+(compact?6:7)+'" style="background:var(--paper)"><div class="grid g2">'
+         +'<div class="field" style="grid-column:1/-1"><label>Brief / notes — what exactly, references, brand notes, deadline details</label><textarea data-act="tset" data-f="notes" data-v="'+t.id+'" rows="3" style="width:100%">'+esc(t.notes||"")+'</textarea></div>'
+         +'<div class="field" style="grid-column:1/-1"><label>Drive / file link'+(t.link?' · <a href="'+esc(t.link)+'" target="_blank" rel="noopener">open</a>':"")+'</label><input type="url" data-act="tset" data-f="link" data-v="'+t.id+'" value="'+esc(t.link||"")+'" placeholder="paste the Drive folder or file link"></div>'
+         +'</div></td></tr>':"");
     }).join("")+'</tbody></table></div>';
 }
 
@@ -1122,6 +1150,9 @@ function viewLeads(){
    + tile(lost.length,"Lost","learn and move on","")
    + tile(conv===null?"—":conv+"%","Conversion","won vs lost so far","")
    +'</div>';
+  var lr={}; lost.forEach(function(l){ if(l.lost_reason) lr[l.lost_reason]=(lr[l.lost_reason]||0)+1; });
+  var lrk=Object.keys(lr).sort(function(a,b){return lr[b]-lr[a];});
+  if(lost.length) h+='<div class="sub" style="margin:-14px 2px 16px">Why we lose: '+(lrk.length?lrk.map(function(k){return esc(k)+" "+lr[k];}).join(" · "):"no reasons logged yet")+(lost.length>sum(lrk.map(function(k){return {n:lr[k]};}),"n")?" · "+(lost.length-sum(lrk.map(function(k){return {n:lr[k]};}),"n"))+" without a reason (open a lost lead to add one)":"")+'</div>';
   h+='<div class="card"><div class="card-head"><h3>Add a lead</h3><span class="sub">every enquiry, DM and "send me your pricing" goes here the same day</span></div><div class="card-body">'
    +'<form class="inline-form" data-act="addlead">'
    +'<div class="field" style="flex:1.5 1 160px"><label>Brand / business</label><input type="text" name="name" required></div>'
@@ -1160,7 +1191,7 @@ function leadsFiltered(){
     if(UI.leadFlag==="needs"&&!(l.needs_tejas&&open)) return false;
     if(UI.leadFlag==="followups"&&!(open&&l.next_date&&l.next_date<=t)) return false;
     if(!terms.length) return true;
-    var q=[l.name,l.contact_name,l.contact_phone,l.email,l.segment,l.source,l.service,l.notes,l.owner_name,l.area,l.instagram,l.website].filter(Boolean).join(" ").toLowerCase();
+    var q=[l.name,l.contact_name,l.contact_phone,l.email,l.segment,l.source,l.service,l.notes,l.owner_name,l.city_area,l.lost_reason,l.instagram,l.website].filter(Boolean).join(" ").toLowerCase();
     return terms.every(function(w){return q.indexOf(w)>-1;});
   });
 }
@@ -1177,11 +1208,13 @@ function leadDetail(l){
    +'<div class="field"><label>Owner</label>'+ownerSelect(l.owner_name,[],'data-act="lset" data-f="owner_name" data-v="'+l.id+'"')+'</div>'
    +'<div class="field"><label>Value ₹ '+(l.kind==="one-time"?"(one-time)":"(per month)")+'</label><input type="number" data-act="lset" data-f="est_value" data-v="'+l.id+'" value="'+esc(l.est_value)+'"></div>'
    +'<div class="field" style="grid-column:1/-1"><label>Notes</label><input type="text" data-act="lset" data-f="notes" data-v="'+l.id+'" value="'+esc(l.notes||"")+'"></div>'
+   +'<div class="field"><label>Proposal link'+(l.proposal_link?' · <a href="'+esc(l.proposal_link)+'" target="_blank" rel="noopener">open</a>':"")+'</label><input type="url" placeholder="paste the proposal web link" data-act="lset" data-f="proposal_link" data-v="'+l.id+'" value="'+esc(l.proposal_link||"")+'"></div>'
+   +(l.stage==="Lost"?'<div class="field"><label>Why we lost it</label><select data-act="lset" data-f="lost_reason" data-v="'+l.id+'"><option value="">— pick a reason —</option>'+selOpts(LOST_REASONS,l.lost_reason)+'</select></div>':"")
    +'</div>'
    +'<div class="kv" style="margin-top:10px"><span>Contact</span><span>'+esc(l.contact_name||"—")+(l.contact_phone?" · "+esc(l.contact_phone):"")+'</span></div>'
    +'<div class="kv"><span>Links</span><span>'+([link(l.email?l.email:"", "Email"),link(l.instagram,"Instagram"),link(l.website,"Website")].filter(Boolean).join(" · ")||"—")+'</span></div>'
    +'<div class="kv"><span>Source · wants</span><span>'+esc(l.source||"—")+(l.service?" · "+esc(l.service):"")+'</span></div>'
-   +(l.area?'<div class="kv"><span>Area</span><span>'+esc(l.area)+'</span></div>':"")
+   +(l.city_area?'<div class="kv"><span>Area</span><span>'+esc(l.city_area)+'</span></div>':"")
    +(l.why?'<div style="margin-top:10px"><b>Why this lead</b><div class="sub" style="white-space:pre-wrap">'+esc(l.why)+'</div></div>':"")
    +(l.email_draft?'<details style="margin-top:10px"><summary class="sub" style="cursor:pointer">Email draft</summary><div class="lead-msg">'+esc(String(l.email_draft).replace(/<[^>]+>/g,"").replace(/\n{3,}/g,"\n\n"))+'</div></details>':"")
    +(l.whatsapp_draft?'<details style="margin-top:6px"><summary class="sub" style="cursor:pointer">WhatsApp draft</summary><div class="lead-msg">'+esc(l.whatsapp_draft)+'</div></details>':"")
@@ -1264,6 +1297,9 @@ function viewClients(){
        +'<div class="kv"><span>Onboarding</span><span class="tnum">'+pr.done+"/"+pr.total+'</span></div>'
        +(financeOn()?'<div class="kv"><span>Retainer</span><span class="tnum">'+money(retainer(c.id))+'</span></div>'
          +'<div class="kv"><span>This month</span><span>'+(inv?(inv.paid_on?'<span class="chip green">paid</span>':(inv.raised?'<span class="chip amber">unpaid</span>':'<span class="chip grey">not raised</span>')):'<span class="chip grey">not raised</span>')+'</span></div>':"")
+       +(function(){ var q=Number(c.posts_per_month)||0; if(!q) return ""; var mo=thisMonth(); var lv=S.posts.filter(function(p){return p.client_id===c.id&&String(p.date).slice(0,7)===mo&&p.status==="Live";}).length;
+          var exp=Math.round(q*new Date().getDate()/monthDays(mo)); return '<div class="kv"><span>Live this month</span><span class="tnum"><span class="chip '+(lv>=exp?"green":lv>=exp*0.7?"amber":"red")+'">'+lv+" / "+q+'</span></span></div>'; })()
+       +'<div class="kv"><span>Health</span><span><span class="chip '+healthChip(c.health||"Happy")+'">'+esc(c.health||"Happy")+'</span></span></div>'
        +'<div class="kv"><span>Owner</span><span>'+esc(pname(c.owner_id))+'</span></div></button>';
     }).join("")+'</div>';
   return h;
@@ -1284,6 +1320,9 @@ function drawer(){
    + cfld(c,"invoice_day","Invoice day","number")+cfld(c,"reporting_day","Reporting day","text")
    +'<div class="field"><label>Account owner</label>'+peopleSelect(c.owner_id,'data-act="cset" data-f="owner_id" data-v="'+c.id+'"',true)+'</div>'
    +'<div class="field"><label>Status</label><select data-act="cset" data-f="status" data-v="'+c.id+'">'+selOpts(CLIENT_STATUS,c.status)+'</select></div>'
+   +'<div class="field"><label>Client health</label><select data-act="cset" data-f="health" data-v="'+c.id+'">'+selOpts(HEALTH,c.health||"Happy")+'</select></div>'
+   +'<div class="field"><label>Brand kit link'+(c.brand_kit?' · <a href="'+esc(c.brand_kit)+'" target="_blank" rel="noopener">open</a>':"")+'</label><input type="url" data-act="cset" data-f="brand_kit" data-v="'+c.id+'" value="'+esc(c.brand_kit||"")+'" placeholder="Drive folder: logos, fonts, colours, best posts"></div>'
+   +'<div class="field" style="grid-column:1/-1"><label>Brand notes — tone, do\'s and don\'ts, colours, what the client hates</label><textarea data-act="cset" data-f="brand_notes" data-v="'+c.id+'" rows="3" style="width:100%">'+esc(c.brand_notes||"")+'</textarea></div>'
    +'<div class="field" style="grid-column:1/-1"><label>Notes / where access and passwords are kept</label><input type="text" data-act="cset" data-f="notes" data-v="'+c.id+'" value="'+esc(c.notes||"")+'"></div>'
    +'</div></div>';
 
@@ -1301,7 +1340,7 @@ function drawer(){
   if(financeOn()){
     var inv=invoiceFor(c.id,m), exp=expensesFor(c.id,m), et=sum(exp,"amount"), f=finRow(c.id);
     h+='<div class="card"><div class="card-head"><h3>Money</h3><span class="chip lime">Tejas + Snehal only</span><span class="spacer"></span><span class="eyebrow">'+esc(m)+'</span></div><div class="card-body">'
-     +'<div class="grid g2"><div class="field"><label>Monthly retainer</label><input type="number" data-act="fset" data-f="retainer" data-v="'+c.id+'" value="'+esc(f?f.retainer:0)+'"></div>'
+     +'<div class="grid g2"><div class="field"><label>Monthly retainer <select data-act="fset" data-f="currency" data-v="'+c.id+'" style="width:auto;display:inline-block;padding:0 4px;margin-left:4px">'+selOpts(CURS,(f&&f.currency)||"INR")+'</select></label><input type="number" data-act="fset" data-f="retainer" data-v="'+c.id+'" value="'+esc(f?f.retainer:0)+'"></div>'
      +'<div class="field"><label>Renewal / review date</label><input type="date" data-act="fset" data-f="renewal_date" data-v="'+c.id+'" value="'+esc(f&&f.renewal_date?f.renewal_date:"")+'"></div></div>'
      +'<div style="margin-top:10px"><button class="chip '+(c.counts_for_goal?"lime":"grey")+'" data-act="goalflag" data-v="'+c.id+'">'+(c.counts_for_goal?"✓ counts toward Japan":"existing client — not counted toward Japan")+'</button></div>'
      +'<div style="height:10px"></div>'
@@ -1360,7 +1399,8 @@ function postEditor(){
    +'</div>'
    +'<div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="eyebrow" style="margin-right:4px">Status</span>'
    + POST_STATUS.map(function(s){return '<button class="chip '+(s===p.status?(statusChip(s)||""):"grey")+'" data-act="poststatus" data-v="'+p.id+'" data-k="'+s+'"'+(s===p.status?' style="outline:2px solid var(--purple)"':"")+'>'+s+'</button>';}).join("")
-   +'<span class="spacer"></span><button class="btn danger sm" data-act="delpost" data-v="'+p.id+'">Delete post</button></div>'
+   +'<span class="spacer"></span><span class="eyebrow">Revisions</span> <button class="chip grey" data-act="postrev" data-v="'+p.id+'" data-k="-1">−</button> <b class="tnum">'+(Number(p.revisions)||0)+'</b> <button class="chip grey" data-act="postrev" data-v="'+p.id+'" data-k="1">+1</button>'
+   +' <button class="btn danger sm" data-act="delpost" data-v="'+p.id+'">Delete post</button></div>'
    +'</div></div><div style="height:14px"></div>';
 }
 function viewCalendar(){
@@ -1403,8 +1443,8 @@ function viewCalendar(){
   }
   h+='</div></div></div>';
 
-  if(ALL){ h+='<div class="sub" style="margin-top:10px">Red outline = the date has passed and the post is not marked Live. Pick a client above to add posts.</div>'; return h; }
-  h+='<div class="sub" style="margin:10px 0 0">Red outline = the date has passed and the post is not marked Live.</div>';
+  if(ALL){ h+='<div class="sub" style="margin-top:10px">Red outline = the date has passed and the post is not marked Live.'+postSpeed(posts)+' Pick a client above to add posts.</div>'; return h; }
+  h+='<div class="sub" style="margin:10px 0 0">Red outline = the date has passed and the post is not marked Live.'+postSpeed(posts)+'</div>';
   h+='<div style="height:14px"></div><div class="card"><div class="card-head"><h3>Add one post</h3></div><div class="card-body"><form class="inline-form" data-act="addpost">'
    +'<div class="field" style="flex:0 0 140px"><label>Date</label><input type="date" name="date" value="'+mo+'-'+pad(Math.min(new Date().getDate(),days))+'" required></div>'
    +'<div class="field" style="flex:0 0 120px"><label>Type</label><select name="type">'+selOpts(["Reel","Static","Carousel","Story","Video","Blog"],"Reel")+'</select></div>'
@@ -1413,6 +1453,15 @@ function viewCalendar(){
    +'<div class="field"><label>Owner</label>'+ownerSelect(myName(),[],'name="owner_name"')+'</div>'
    +'<button class="btn" type="submit">Add</button></form></div></div>';
   return h;
+}
+function postSpeed(posts){
+  var live=posts.filter(function(p){return p.live_at&&p.created_at;});
+  var days=live.map(function(p){return Math.max(0,(new Date(p.live_at)-new Date(p.created_at))/86400000);});
+  var revs=posts.filter(function(p){return Number(p.revisions)>0;});
+  var out="";
+  if(days.length) out+=" · Idea → live: "+(Math.round(days.reduce(function(a,b){return a+b;},0)/days.length*10)/10)+" days on average ("+days.length+" posts)";
+  if(posts.length) out+=" · Revisions: "+posts.reduce(function(a,p){return a+(Number(p.revisions)||0);},0)+" across "+posts.length+" posts"+(revs.length?" (most: "+esc(revs.sort(function(a,b){return b.revisions-a.revisions;})[0].title.slice(0,30))+", "+revs[0].revisions+")":"");
+  return out;
 }
 function statusChip(s){ return s==="Live"?"green":s==="Scheduled"?"amber":s==="Approved"?"":s==="Designed"?"blue":"grey"; }
 
@@ -1423,11 +1472,14 @@ function viewMoney(){
   var billed=0,collected=0,expTotal=0,expected=0;
   var rows=active.map(function(c){
     var inv=invoiceFor(c.id,mo), exp=expensesFor(c.id,mo), et=sum(exp,"amount");
-    var amt=inv?Number(inv.amount)||0:retainer(c.id);
-    expected+=retainer(c.id); if(inv&&inv.raised) billed+=amt; if(inv&&inv.paid_on) collected+=amt; expTotal+=et;
-    return {c:c,inv:inv,amt:amt,exp:et};
+    var amt=inv?Number(inv.amount)||0:retainer(c.id), cu=curOf(c.id), amtI=toINR(amt,cu);
+    expected+=toINR(retainer(c.id),cu); if(inv&&inv.raised) billed+=amtI; if(inv&&inv.paid_on) collected+=amtI; expTotal+=et;
+    return {c:c,inv:inv,amt:amt,amtI:amtI,cu:cu,exp:et,hrs:hoursFor(c.id,mo)};
   });
   var renew=S.clients.filter(function(c){ var f=finRow(c.id); return f&&f.renewal_date&&f.renewal_date<=addDays(today(),30)&&c.status!=="Ended"; });
+  var ohs=S.overheads.filter(function(o){return o.month===mo;}), ohTotal=sum(ohs,"amount");
+  var pays=S.payouts.filter(function(p){return p.month===mo;});
+  var fxNeed=[]; rows.forEach(function(r){ if(r.cu!=="INR"&&fxNeed.indexOf(r.cu)<0) fxNeed.push(r.cu); });
 
   var h='<div class="sec-head"><h2 class="h-sec">Money</h2><span class="chip lime">Tejas + Snehal only</span><span class="spacer"></span><input type="month" data-act="monmonth" value="'+esc(mo)+'" style="width:auto"></div>';
   h+='<div class="tiles">'
@@ -1437,17 +1489,39 @@ function viewMoney(){
    +tile(money(billed-collected),"Outstanding","chase on the 7th and 15th",(billed-collected)>0?"bad":"good")
    +tile(money(expTotal),"Client costs","freelancers, ads, shoots","")
    +tile(money(collected-expTotal),"Left after costs","before salaries and office","")
+   +tile(money(ohTotal),"Overheads","salaries, rent, tools — below","")
+   +tile(money(collected-expTotal-ohTotal),"True profit","collected − client costs − overheads",(collected-expTotal-ohTotal)>=0?"good":"bad")
    +'</div>';
+  if(fxNeed.length) h+='<div class="card" style="margin-bottom:14px"><div class="card-body" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center"><span class="sub">Exchange rates used to convert foreign retainers into ₹ for the totals:</span>'
+   +fxNeed.map(function(c){ var r=fxRate(c); return '<label style="display:flex;gap:6px;align-items:center">1 '+c+' = ₹ <input type="number" step="0.01" data-act="fxset" data-k="'+c+'" value="'+(r||"")+'" style="width:90px"'+(r?"":' placeholder="set rate"')+'></label>'+(r?"":' <span class="chip red">set the '+c+' rate</span>'); }).join("")+'</div></div>';
   h+='<div class="card"><div class="card-head"><h3>Per client · '+esc(monthLabel(mo))+'</h3><span class="spacer"></span><button class="btn sm ghost" data-act="genmonth">Raise all invoices for this month</button></div><div class="scroll"><table>'
-   +'<thead><tr><th>Client</th><th class="right">Retainer</th><th>Invoice</th><th>Payment</th><th class="right">Costs</th><th class="right">Margin</th></tr></thead><tbody>'
+   +'<thead><tr><th>Client</th><th class="right">Retainer</th><th>Invoice</th><th>Payment</th><th class="right">Costs</th><th class="right">Margin</th><th class="right">Hours</th><th class="right">₹ / hour</th></tr></thead><tbody>'
    +(rows.length?rows.map(function(r){
       return '<tr><td><b>'+esc(r.c.name)+'</b><br><span class="sub">'+esc(pname(r.c.owner_id))+'</span></td>'
-       +'<td class="right tnum">'+money(r.amt)+'</td>'
+       +'<td class="right tnum">'+fmtC(r.amt,r.cu)+(r.cu!=="INR"?'<br><span class="sub">'+money(r.amtI)+'</span>':"")+'</td>'
        +'<td><button class="chip '+(r.inv&&r.inv.raised?"blue":"grey")+'" data-act="raise" data-v="'+r.c.id+'">'+(r.inv&&r.inv.raised?"raised":"not raised")+'</button></td>'
        +'<td><button class="chip '+(r.inv&&r.inv.paid_on?"green":"red")+'" data-act="paid" data-v="'+r.c.id+'">'+(r.inv&&r.inv.paid_on?("paid "+fmtD(r.inv.paid_on)):(function(){ if(!(r.inv&&r.inv.raised)) return "unpaid"; var dd=mo+"-"+pad(Math.min(Number(r.c.invoice_day)||1,monthDays(mo))); var late=Math.floor((parseISO(today())-parseISO(dd))/86400000); return late>0?("unpaid · "+late+" day"+(late===1?"":"s")+" late"):"unpaid"; })())+'</button></td>'
-       +'<td class="right tnum">'+money(r.exp)+'</td><td class="right tnum"><b>'+money(r.amt-r.exp)+'</b></td></tr>';
-    }).join(""):'<tr><td colspan="6" class="empty">No active clients yet.</td></tr>')
+       +'<td class="right tnum">'+money(r.exp)+'</td><td class="right tnum"><b>'+money(r.amtI-r.exp)+'</b></td>'
+       +'<td class="right tnum">'+(r.hrs||"—")+'</td><td class="right tnum">'+(r.hrs?money(Math.round((r.amtI-r.exp)/r.hrs)):'<span class="sub">log hours</span>')+'</td></tr>';
+    }).join(""):'<tr><td colspan="8" class="empty">No active clients yet.</td></tr>')
    +'</tbody></table></div></div>';
+  h+='<div style="height:14px"></div><div class="card"><div class="card-head"><h3>Studio overheads · '+esc(monthLabel(mo))+'</h3><span class="sub">salaries, rent, software, phone — anything not tied to one client</span><span class="spacer"></span>'
+   +(!ohs.length&&S.overheads.some(function(o){return o.month===prevMonth(mo);})?'<button class="btn sm ghost" data-act="copyoh">Copy last month</button>':"")+'</div><div class="card-body">'
+   +(ohs.length?ohs.map(function(o){return '<div class="kv"><span>'+esc(o.label)+'</span><span class="tnum">'+money(o.amount)+' <button class="icon-btn" data-act="deloh" data-v="'+o.id+'">✕</button></span></div>';}).join("")+'<div class="kv"><b>Total</b><b class="tnum">'+money(ohTotal)+'</b></div>':'<div class="sub">Nothing logged for this month yet.</div>')
+   +'<form class="inline-form" data-act="addoh" style="margin-top:10px"><div class="field" style="flex:2 1 200px"><label>What</label><input type="text" name="label" required placeholder="e.g. Bhavana salary, office rent, Canva"></div>'
+   +'<div class="field" style="flex:0 0 130px"><label>Amount ₹</label><input type="number" name="amount" required></div><button class="btn ghost sm" type="submit">Add</button></form></div></div>';
+  var owed=sum(pays.filter(function(p){return !p.paid_on;}),"amount"), paidAmt=sum(pays.filter(function(p){return p.paid_on;}),"amount");
+  h+='<div style="height:14px"></div><div class="card"><div class="card-head"><h3>Freelancer payouts · '+esc(monthLabel(mo))+'</h3><span class="chip '+(owed?"amber":"green")+'">'+money(owed)+' owed</span><span class="chip grey">'+money(paidAmt)+' paid</span></div>'
+   +(pays.length?'<div class="scroll"><table><thead><tr><th>Who</th><th>For</th><th>Client</th><th class="right">Amount</th><th>Status</th><th></th></tr></thead><tbody>'+pays.map(function(p){
+       return '<tr><td><b>'+esc(pname(p.person_id))+'</b></td><td>'+esc(p.label)+'</td><td>'+esc(p.client_id?clientName(p.client_id):"—")+'</td><td class="right tnum">'+money(p.amount)+'</td>'
+        +'<td><button class="chip '+(p.paid_on?"green":"amber")+'" data-act="payoutpaid" data-v="'+p.id+'">'+(p.paid_on?"paid "+fmtD(p.paid_on):"owed — mark paid")+'</button></td><td class="right"><button class="icon-btn" data-act="delpayout" data-v="'+p.id+'">✕</button></td></tr>'; }).join("")+'</tbody></table></div>':'<div class="empty">No payouts logged for this month.</div>')
+   +'<div class="card-body"><form class="inline-form" data-act="addpayout">'
+   +'<div class="field"><label>Who</label>'+peopleSelect("",'name="person_id" required',true)+'</div>'
+   +'<div class="field"><label>Client</label><select name="client_id"><option value="">— none —</option>'+S.clients.map(function(c){return '<option value="'+c.id+'">'+esc(c.name)+'</option>';}).join("")+'</select></div>'
+   +'<div class="field" style="flex:2 1 160px"><label>For what</label><input type="text" name="label" required placeholder="e.g. 4 reels edited"></div>'
+   +'<div class="field" style="flex:0 0 120px"><label>Amount ₹</label><input type="number" name="amount" required></div>'
+   +'<label class="sub" style="display:flex;gap:6px;align-items:center;padding-bottom:8px"><input type="checkbox" name="as_cost" checked style="width:auto"> also count as a cost on that client</label>'
+   +'<button class="btn ghost sm" type="submit">Add</button></form></div></div>';
   h+='<div style="height:14px"></div><div class="card"><div class="card-head"><h3>Renewals in the next 30 days</h3></div>'
    +(renew.length?('<div class="scroll"><table><tbody>'+renew.map(function(c){ var f=finRow(c.id);
       return '<tr><td><b>'+esc(c.name)+'</b></td><td>renews '+fmtD(f.renewal_date)+'</td><td><span class="chip '+(f.renewal_date<today()?"red":"amber")+'">'+(f.renewal_date<today()?"overdue":"within 30 days")+'</span></td><td>'+esc(pname(c.owner_id))+'</td></tr>';
@@ -1487,7 +1561,15 @@ function viewTeam(){
         return '<button class="chip '+(on?"lime":"grey")+'" data-act="alloc" data-v="'+p.id+'" data-k="'+c.id+'">'+(on?"✓ ":"")+esc(c.name)+'</button>'; }).join("")
      +'</div></div>';
   }).join("");
-  return h+'</div>';
+  h+='</div>';
+  var hm=thisMonth(), team=S.people.filter(function(p){return S.timeLogs.some(function(x){return x.person_id===p.id&&String(x.date).slice(0,7)===hm;});});
+  var cids=[]; S.timeLogs.forEach(function(x){ if(String(x.date).slice(0,7)===hm&&cids.indexOf(x.client_id||"")<0) cids.push(x.client_id||""); });
+  h+='<div style="height:14px"></div><div class="card"><div class="card-head"><h3>Hours this month</h3><span class="sub">from the "Log your hours" box on Today</span></div>'
+   +(cids.length?'<div class="scroll"><table><thead><tr><th>Client</th>'+team.map(function(p){return '<th class="right">'+esc(p.name)+'</th>';}).join("")+'<th class="right">Total</th></tr></thead><tbody>'
+     +cids.map(function(cid){ var c=cid||null; return '<tr><td><b>'+esc(c?clientName(c):"internal / studio")+'</b></td>'+team.map(function(p){ var hh=S.timeLogs.filter(function(x){return (x.client_id||"")===cid&&x.person_id===p.id&&String(x.date).slice(0,7)===hm;}).reduce(function(s,x){return s+(Number(x.hours)||0);},0); return '<td class="right tnum">'+(hh||"—")+'</td>'; }).join("")
+       +'<td class="right tnum"><b>'+S.timeLogs.filter(function(x){return (x.client_id||"")===cid&&String(x.date).slice(0,7)===hm;}).reduce(function(s,x){return s+(Number(x.hours)||0);},0)+'</b></td></tr>'; }).join("")
+     +'</tbody></table></div>':'<div class="empty">No hours logged this month yet.</div>')+'</div>';
+  return h;
 }
 
 /* ============================================================ events */
@@ -1513,6 +1595,14 @@ document.addEventListener("click",function(ev){
     return;
   }
   if(act==="closelead"){ UI.lead=null; redrawLeads(); return; }
+  if(act==="taskopen"){ UI.taskOpen=UI.taskOpen===v?null:v; var trs=document.getElementById("taskResults"); if(trs&&UI.tab==="tasks") trs.innerHTML=taskTable(tasksFiltered(),false); else render(); return; }
+  if(act==="postrev"){ var pr=byId(S.posts,v); if(!pr) return; pr.revisions=Math.max(0,(Number(pr.revisions)||0)+Number(k)); render(); run(DB.update("posts",v,{revisions:pr.revisions})); return; }
+  if(act==="delhours"){ S.timeLogs=S.timeLogs.filter(function(x){return x.id!==v;}); render(); run(DB.remove("time_logs",v)); return; }
+  if(act==="deloh"){ S.overheads=S.overheads.filter(function(x){return x.id!==v;}); render(); run(DB.remove("overheads",v)); return; }
+  if(act==="copyoh"){ var mo3=UI.monMonth||thisMonth(), prev=S.overheads.filter(function(o){return o.month===prevMonth(mo3);});
+    run(Promise.all(prev.map(function(o){ return DB.insert("overheads",{month:mo3,label:o.label,amount:o.amount}); })).then(function(rs){ rs.forEach(function(r){ if(r) S.overheads.push(r); }); render(); }),"Copied "+prev.length+" overheads from last month"); return; }
+  if(act==="payoutpaid"){ var po2=byId(S.payouts,v); if(!po2) return; po2.paid_on=po2.paid_on?null:today(); render(); run(DB.update("freelancer_payouts",v,{paid_on:po2.paid_on})); return; }
+  if(act==="delpayout"){ S.payouts=S.payouts.filter(function(x){return x.id!==v;}); render(); run(DB.remove("freelancer_payouts",v)); return; }
   if(act==="leadmore"){ UI.leadPage++; redrawLeads(); return; }
   if(act==="lclear"){ UI.leadQ=""; UI.leadStage="all"; UI.leadSeg="all"; UI.leadFlag=""; UI.leadOwner=""; UI.leadPage=1; render(); return; }
   if(act==="tdueclear"){ UI.tDue=""; render(); return; }
@@ -1631,7 +1721,7 @@ document.addEventListener("click",function(ev){
   }
   if(act==="openpost"){ UI.post=v; render(); var ed=document.querySelector('[data-act="closepost"]'); if(ed) ed.scrollIntoView({block:"nearest"}); return; }
   if(act==="closepost"){ UI.post=null; render(); return; }
-  if(act==="poststatus"){ var pz=byId(S.posts,v); if(!pz) return; pz.status=k; if(k==="Live"&&!pz.live_at) pz.live_at=new Date().toISOString(); render(); run(DB.update("posts",v,{status:k,status_by:myName()||null}).then(function(r){ if(r&&r.live_at!==undefined) Object.assign(pz,{live_at:r.live_at,designed_at:r.designed_at}); })); return; }
+  if(act==="poststatus"){ var pz=byId(S.posts,v); if(!pz) return; pz.status=k; if(k==="Live"&&!pz.live_at) pz.live_at=new Date().toISOString(); var pzp={status:k,status_by:myName()||null}; if(k==="Approved"&&!pz.approved_at) pz.approved_at=pzp.approved_at=new Date().toISOString(); if(k==="Scheduled"&&!pz.scheduled_at) pz.scheduled_at=pzp.scheduled_at=new Date().toISOString(); render(); run(DB.update("posts",v,pzp).then(function(r){ if(r&&r.live_at!==undefined) Object.assign(pz,{live_at:r.live_at,designed_at:r.designed_at}); })); return; }
   if(act==="delpost"){
     if(!confirm("Delete this post?")) return;
     S.posts=S.posts.filter(function(x){return x.id!==v;}); UI.post=null; render(); run(DB.remove("posts",v)); return;
@@ -1697,7 +1787,7 @@ function gSearch(q){
   var terms=String(q||"").toLowerCase().trim().split(/\s+/).filter(Boolean);
   if(!terms.length||String(q).trim().length<2){ box.innerHTML=""; return; }
   var hit=function(parts){ var s=parts.filter(Boolean).join(" ").toLowerCase(); return terms.every(function(w){return s.indexOf(w)>-1;}); };
-  var L=S.leads.filter(function(l){return hit([l.name,l.contact_name,l.contact_phone,l.email,l.area,l.segment]);}).slice(0,6);
+  var L=S.leads.filter(function(l){return hit([l.name,l.contact_name,l.contact_phone,l.email,l.city_area,l.segment]);}).slice(0,6);
   var C=S.clients.filter(function(c){return hit([c.name,c.contact_name,c.contact_phone,c.package]);}).slice(0,5);
   var T=S.tasks.filter(function(t){return hit([t.title,clientName(t.client_id)]);}).slice(0,6);
   var h="";
@@ -1716,6 +1806,9 @@ document.addEventListener("keydown",function(ev){
 document.addEventListener("change",function(ev){
   var el=ev.target.closest("[data-act]"); if(!el) return;
   var act=el.getAttribute("data-act"), v=el.getAttribute("data-v"), f=el.getAttribute("data-f"), val=el.value;
+  if(act==="fxset"){ var fx=Object.assign({},getSetting("fx")||{}); fx[el.getAttribute("data-k")]=Number(val)||0;
+    var srow=null; S.settings.forEach(function(x){ if(x.key==="fx") srow=x; }); if(srow) srow.value=fx; else S.settings.push({key:"fx",value:fx});
+    render(); run(DB.upsertSetting("fx",fx)); return; }
   if(act==="lfilt"){ UI[f]=val; UI.leadPage=1; redrawLeads(); return; }
   if(act==="rset"){ var rp={}; rp[f]=(f==="day")?(Number(val)||1):val; local(S.recurring,v,rp); render(); run(DB.update("recurring",v,rp)); return; }
   if(act==="fwho"){ UI.tWhoSet=true; UI.tWho=val; render(); return; }
@@ -1762,7 +1855,9 @@ document.addEventListener("change",function(ev){
     var newKind=lp.kind!==undefined?lp.kind:ld2.kind;
     var newEst=lp.est_value!==undefined?lp.est_value:ld2.est_value;
     lp.goal_value=leadGoalValue(newKind,newEst);
-    local(S.leads,v,lp); render(); run(DB.update("leads",v,lp).then(function(){ refreshGoal(); })); return;
+    local(S.leads,v,lp); render(); run(DB.update("leads",v,lp).then(function(){ refreshGoal(); }));
+    if(f==="stage"&&val==="Lost"&&!ld2.lost_reason){ UI.lead=v; redrawLeads(); var dl=document.getElementById("leadDetail"); if(dl) dl.scrollIntoView({behavior:"smooth",block:"start"}); toast("Marked lost — pick the reason in the lead card"); }
+    return;
   }
 });
 
@@ -1817,6 +1912,24 @@ document.addEventListener("submit",function(ev){
     var nn={to_name:d.to_name,from_name:myName()||"",text:d.text,read:false,created_at:new Date().toISOString()};
     el.reset(); run(DB.insert("notes",nn).then(function(r){ S.notes.push(r||nn); render(); }),"Note left for "+d.to_name+" — they will see it on their Today");
     return;
+  }
+  if(act==="addhours"){
+    var hrs=Number(d.hours)||0; if(!hrs||!myPersonId()) return;
+    var tl={person_id:myPersonId(),client_id:d.client_id||null,date:today(),hours:hrs,note:d.note||""};
+    el.reset(); run(DB.insert("time_logs",tl).then(function(r){ S.timeLogs.push(r||tl); render(); }),"Logged "+hrs+" h"); return;
+  }
+  if(act==="addoh"){
+    if(!d.label) return;
+    var oh={month:UI.monMonth||thisMonth(),label:d.label,amount:Number(d.amount)||0};
+    el.reset(); run(DB.insert("overheads",oh).then(function(r){ S.overheads.push(r||oh); render(); })); return;
+  }
+  if(act==="addpayout"){
+    if(!d.label||!d.person_id) return;
+    var pmo=UI.monMonth||thisMonth();
+    var py={person_id:d.person_id,client_id:d.client_id||null,month:pmo,label:d.label,amount:Number(d.amount)||0,paid_on:null};
+    var jobs=[DB.insert("freelancer_payouts",py).then(function(r){ S.payouts.push(r||py); })];
+    if(d.as_cost&&d.client_id){ var ex={client_id:d.client_id,month:pmo,label:"Freelancer: "+pname(d.person_id)+" — "+d.label,amount:py.amount}; jobs.push(DB.insert("expenses",ex).then(function(r){ S.expenses.push(r||ex); })); }
+    el.reset(); run(Promise.all(jobs).then(function(){ render(); })); return;
   }
   if(act==="addlead"){
     if(!d.name) return;
