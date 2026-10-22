@@ -450,7 +450,7 @@ function peopleSelect(selId,attrs,blank){
 }
 
 /* ============================================================ UI state */
-var UI={tab:"today",perfMonth:"",tWho:"all",tStatus:"open",tClient:"all",client:null,calClient:"",calMonth:"",monMonth:"",showPaste:false,addClient:false,post:null};
+var UI={tab:"today",perfMonth:"",tWho:"all",tStatus:"open",tClient:"all",client:null,calClient:"",calMonth:"",monMonth:"",showPaste:false,addClient:false,post:null,leadQ:"",leadStage:"all"};
 
 /* ============================================================ render */
 function render(){
@@ -469,6 +469,7 @@ function render(){
   document.getElementById("view").innerHTML=(myPerson()?"":identifyCard())+v;
   document.getElementById("drawer-host").innerHTML=UI.client?drawer():"";
   setBusy(0);
+  if(UI.tab==="leads") applyLeadFilter();
 }
 function identifyCard(){
   if(!S.people.length) return "";
@@ -1011,6 +1012,24 @@ function aiPanel(){
    +'</ul></details></div></div><div style="height:14px"></div>';
   return h;
 }
+function leadKey(l){
+  return [l.name,l.contact_name,l.contact_phone,l.email,l.segment,l.source,l.service,l.notes,l.owner_name,l.area,l.instagram,l.website,l.stage]
+    .filter(Boolean).join(" ").toLowerCase();
+}
+function applyLeadFilter(){
+  var box=document.getElementById("leadSearch"); if(!box) return;
+  var terms=(UI.leadQ||"").toLowerCase().trim().split(/\s+/).filter(Boolean);
+  var stg=UI.leadStage||"all", shown=0, total=0;
+  document.querySelectorAll("[data-q]").forEach(function(el){
+    var q=el.getAttribute("data-q")||"", ok=terms.every(function(t){return q.indexOf(t)>-1;});
+    if(stg!=="all" && el.getAttribute("data-stage")!==stg) ok=false;
+    el.style.display=ok?"":"none";
+    if(el.tagName==="TR"){ total++; if(ok) shown++; }
+  });
+  var c=document.getElementById("leadCount");
+  if(c) c.textContent=(terms.length||stg!=="all")?(shown+" of "+total+" leads match"):(total+" leads");
+  var clr=document.getElementById("leadClear"); if(clr) clr.style.display=(terms.length||stg!=="all")?"":"none";
+}
 function leadAI(l){
   if(l.score==null && !l.email_draft && !l.why) return "";
   var h='<div class="sub" style="margin-top:4px">';
@@ -1063,12 +1082,18 @@ function viewLeads(){
    +'<div class="field" style="flex:0 0 145px"><label>Next follow-up</label><input type="date" name="next_date" value="'+addDays(t,2)+'"></div>'
    +'<button class="btn" type="submit">Add lead</button></form>'
    +'<div class="sub" style="margin-top:8px">A <b>retainer</b> counts toward the goal as its monthly value × months left till December; a <b>one-time</b> project counts as its full amount. Both feed the Japan meter when the lead is marked Won.</div></div></div>';
+  h+='<div style="height:14px"></div><div class="card"><div class="card-body" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">'
+   +'<div class="field" style="flex:2 1 220px"><label>Search leads</label><input type="search" id="leadSearch" placeholder="Name, contact, phone, email, notes…" value="'+esc(UI.leadQ||"")+'" autocomplete="off"></div>'
+   +'<div class="field" style="flex:0 0 160px"><label>Stage</label><select data-act="lstagef">'+selOpts(["all"].concat(LEAD_STAGES),UI.leadStage||"all").replace('>all<','>All stages<')+'</select></div>'
+   +'<button class="btn ghost" type="button" id="leadClear" data-act="lclear" style="display:none">Clear</button>'
+   +'<span class="sub" id="leadCount" style="margin-left:auto;padding-bottom:8px"></span>'
+   +'<div class="sub" style="flex-basis:100%">Tip: tap a lead on the board to jump to its row and update the stage.</div></div></div>';
   h+='<div style="height:14px"></div><div class="stages">'+LEAD_STAGES.map(function(st){
     var ls=S.leads.filter(function(l){return l.stage===st;});
     return '<div class="stage'+(st==="Won"?" stage-won":st==="Lost"?" stage-lost":"")+'"><h4>'+st+'</h4><div class="cnt">'+ls.length+' · '+money(ls.reduce(function(s,l){return s+gval(l);},0))+'</div>'
      + ls.map(function(l){
         var od=l.next_date&&l.next_date<t&&st!=="Won"&&st!=="Lost";
-        return '<div class="item">'+esc(l.name)+(l.score!=null?' <span class="sub">'+esc(l.score)+'</span>':"")+(l.needs_tejas?' <span style="color:var(--red)">●</span>':"")
+        return '<div class="item" data-act="leadjump" data-v="'+l.id+'" data-stage="'+esc(l.stage)+'" data-q="'+esc(leadKey(l))+'">'+esc(l.name)+(l.score!=null?' <span class="sub">'+esc(l.score)+'</span>':"")+(l.needs_tejas?' <span style="color:var(--red)">●</span>':"")
          +'<div class="p">'+money(l.est_value)+(l.kind==="one-time"?" one-time":"/mo")+' · '+esc(l.owner_name||"no owner")+'</div>'
          +(l.next_date&&st!=="Won"&&st!=="Lost"?'<div class="p"'+(od?' style="color:var(--red);font-weight:700"':"")+'>follow up '+fmtD(l.next_date)+(od?" — overdue":"")+'</div>':"")
          +'</div>';
@@ -1077,7 +1102,7 @@ function viewLeads(){
   h+='<div style="height:14px"></div><div class="card scroll"><table><thead><tr><th>Lead</th><th>Stage</th><th>Type</th><th>Owner</th><th class="right">Value ₹</th><th>Next follow-up</th><th>Notes</th><th></th></tr></thead><tbody>'
    +(S.leads.length?S.leads.slice().sort(function(a,b){return LEAD_STAGES.indexOf(a.stage)-LEAD_STAGES.indexOf(b.stage)||(a.next_date||"9999")<(b.next_date||"9999")?-1:1;}).map(function(l){
       var od=l.next_date&&l.next_date<t&&l.stage!=="Won"&&l.stage!=="Lost";
-      return '<tr class="'+(od?"od":"")+'"><td><b>'+esc(l.name)+'</b><br><span class="sub">'+esc(l.contact_name||"")+(l.contact_phone?(" · "+esc(l.contact_phone)):"")+(l.source?(" · "+esc(l.source)):"")+(l.service?(" · "+esc(l.service)):"")+'</span>'+leadAI(l)+'</td>'
+      return '<tr id="lead-'+l.id+'" data-stage="'+esc(l.stage)+'" data-q="'+esc(leadKey(l))+'" class="'+(od?"od":"")+'"><td><b>'+esc(l.name)+'</b><br><span class="sub">'+esc(l.contact_name||"")+(l.contact_phone?(" · "+esc(l.contact_phone)):"")+(l.source?(" · "+esc(l.source)):"")+(l.service?(" · "+esc(l.service)):"")+'</span>'+leadAI(l)+'</td>'
        +'<td><select data-act="lset" data-f="stage" data-v="'+l.id+'">'+selOpts(LEAD_STAGES,l.stage)+'</select></td>'
        +'<td><select data-act="lset" data-f="kind" data-v="'+l.id+'">'+selOpts(["Retainer","One-time"],(l.kind==="one-time"?"One-time":"Retainer"))+'</select></td>'
        +'<td>'+ownerSelect(l.owner_name,[],'data-act="lset" data-f="owner_name" data-v="'+l.id+'"')+'</td>'
@@ -1347,6 +1372,15 @@ document.addEventListener("click",function(ev){
   var tag=el.tagName;
   if(tag==="SELECT"||tag==="INPUT"||tag==="TEXTAREA"||tag==="FORM") return;
   var act=el.getAttribute("data-act"), v=el.getAttribute("data-v"), k=el.getAttribute("data-k");
+  if(act==="leadjump"){
+    var row=document.getElementById("lead-"+v); if(!row) return;
+    row.style.display=""; row.scrollIntoView({behavior:"smooth",block:"center"});
+    row.style.transition="background .3s"; row.style.background="var(--lime, #e6ff7a)";
+    setTimeout(function(){ row.style.background=""; },1600);
+    var sel=row.querySelector('select[data-f="stage"]'); if(sel) setTimeout(function(){ sel.focus(); },400);
+    return;
+  }
+  if(act==="lclear"){ UI.leadQ=""; UI.leadStage="all"; var b=document.getElementById("leadSearch"); if(b){b.value="";} var ss=document.querySelector('select[data-act="lstagef"]'); if(ss) ss.value="all"; applyLeadFilter(); return; }
 
   if(act==="tab"){ UI.tab=v; UI.client=null; render(); return; }
   if(act==="claim"){
@@ -1509,9 +1543,13 @@ document.addEventListener("click",function(ev){
   }
 });
 
+document.addEventListener("input",function(ev){
+  if(ev.target && ev.target.id==="leadSearch"){ UI.leadQ=ev.target.value; applyLeadFilter(); }
+});
 document.addEventListener("change",function(ev){
   var el=ev.target.closest("[data-act]"); if(!el) return;
   var act=el.getAttribute("data-act"), v=el.getAttribute("data-v"), f=el.getAttribute("data-f"), val=el.value;
+  if(act==="lstagef"){ UI.leadStage=val; applyLeadFilter(); return; }
   if(act==="fwho"){ UI.tWho=val; render(); return; }
   if(act==="fclient"){ UI.tClient=val; render(); return; }
   if(act==="fstatus"){ UI.tStatus=val; render(); return; }
