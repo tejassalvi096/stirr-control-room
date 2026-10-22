@@ -97,6 +97,11 @@ main{max-width:1180px;margin:0 auto;padding:20px 16px 80px}
 .gresults button:hover{background:var(--line-soft)}
 .post.late{box-shadow:inset 0 0 0 1.5px var(--red)}
 .myday li{margin:3px 0}
+.qa-prev{font-size:12.5px;color:var(--muted);margin-top:6px;min-height:18px}
+.qa-prev b{color:var(--ink,inherit)}
+.qa-prev .miss{color:var(--amber)}
+.rv-list li{margin:4px 0}
+.post .cs{font-weight:800;margin-right:3px}
 .lead-msg{border-left:2px solid var(--line);padding:4px 8px;margin:6px 0;font-size:12.5px;white-space:pre-wrap}
 .lead-msg.in{border-color:var(--green)}
 .tile .k{font-family:"JetBrains Mono",monospace;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
@@ -503,6 +508,7 @@ function render(){
     : UI.tab==="calendar"?viewCalendar()
     : UI.tab==="money"?(financeOn()?viewMoney():'<div class="card"><div class="empty">The money section is limited to Tejas and Snehal.</div></div>')
     : UI.tab==="perf"?viewPerf()
+    : UI.tab==="review"?viewReview()
     : viewTeam();
   document.getElementById("view").innerHTML=(myPerson()?"":identifyCard())+v;
   document.getElementById("drawer-host").innerHTML=UI.client?drawer():"";
@@ -531,6 +537,7 @@ function loginView(err,msg){
 function shell(){
   var tabs=[["today","Today"],["tasks","Tasks"],["leads","Leads"],["clients","Clients"],["onboard","Onboarding"],["calendar","Calendar"]];
   if(financeOn()) tabs.push(["money","Money"]);
+  tabs.splice(1,0,["review","Weekly review"]);
   tabs.push(["perf","Performance"]);
   tabs.push(["team","Team"]);
   return '<div class="topbar"><div class="topbar-in">'
@@ -1027,6 +1034,108 @@ function taskBoard(){
     +taskTable(od,false)
     +(rest.length?'<div class="sec-head" style="margin:18px 0 8px"><h3 style="font-size:17px">Due next</h3><span class="sub">'+rest.length+' open, soonest first</span></div>'+taskTable(rest,false):"");
 }
+function escRe(x){ return String(x).replace(/[.*+?^$(){}|[\]\\]/g,"\\$&"); }
+function parseQuick(txt){
+  var t=" "+String(txt||"")+" ", out={priority:"P2"}, dm=null, td=today();
+  var pm=t.match(/\b(p[123])\b/i);
+  if(pm){ out.priority=pm[1].toUpperCase(); t=t.replace(pm[0]," "); }
+  else if(/\b(urgent|asap)\b/i.test(t)){ out.priority="P1"; t=t.replace(/\b(urgent|asap)\b/i," "); }
+  S.people.forEach(function(p){ if(out.owner_id) return; var n=String(p.name||"").trim().split(/\s+/)[0]; if(n.length<3) return;
+    var re=new RegExp("\\b"+escRe(n)+"('s)?\\b","i"); if(re.test(t)){ out.owner_id=p.id; out.owner=p.name; t=t.replace(re," "); } });
+  var cl=S.clients.filter(function(c){return c.status!=="Ended";}).sort(function(a,b){return String(b.name).length-String(a.name).length;});
+  cl.forEach(function(c){ if(out.client_id) return; var re=new RegExp(escRe(c.name),"i"); if(re.test(t)){ out.client_id=c.id; out.client=c.name; t=t.replace(re," "); } });
+  if(!out.client_id) cl.forEach(function(c){ if(out.client_id) return; var words=String(c.name).split(/\s+/).filter(Boolean);
+    var acr=words.length>2?words.map(function(w){return w[0];}).join(""):"";
+    if(acr.length>=3){ var ra=new RegExp("\\b"+escRe(acr)+"\\b","i"); if(ra.test(t)){ out.client_id=c.id; out.client=c.name; t=t.replace(ra," "); return; } }
+    var w=words[0]||""; if(w.length<4) return; var re=new RegExp("\\b"+escRe(w)+"\\b","i"); if(re.test(t)){ out.client_id=c.id; out.client=c.name; t=t.replace(re," "); } });
+  var MON=["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+  if((dm=t.match(/\b(by |on |due )?(today|eod|tonight)\b/i))) out.due=td;
+  else if((dm=t.match(/\b(by |on |due )?(tomorrow|tmrw|tmr)\b/i))) out.due=addDays(td,1);
+  else if((dm=t.match(/\bin (\d{1,2}) days?\b/i))) out.due=addDays(td,+dm[1]);
+  else if((dm=t.match(/\bnext week\b/i))) out.due=addDays(td,7);
+  else if((dm=t.match(/\b(by |on |due )?(sun(day)?|mon(day)?|tue(s|sday)?|wed(nesday)?|thu(r|rs|rsday)?|fri(day)?|sat(urday)?)\b/i))){
+    var idx=["sun","mon","tue","wed","thu","fri","sat"].indexOf(dm[2].slice(0,3).toLowerCase()); var diff=(idx-parseISO(td).getDay()+7)%7; out.due=addDays(td,diff===0?7:diff); }
+  else if((dm=t.match(/\b(by |on |due )?(\d{1,2})(st|nd|rd|th)?[ \/.-]?(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sept?(ember)?|oct(ober)?|nov(ember)?|dec(ember)?)\b/i))){
+    var y=parseISO(td).getFullYear(), d1=y+"-"+pad(MON.indexOf(dm[4].slice(0,3).toLowerCase())+1)+"-"+pad(+dm[2]); if(d1<td) d1=(y+1)+d1.slice(4); out.due=d1; }
+  else if((dm=t.match(/\b(by |on |due )?(\d{1,2})\/(\d{1,2})\b/))){
+    var y2=parseISO(td).getFullYear(), d2=y2+"-"+pad(+dm[3])+"-"+pad(+dm[2]); if(d2<td) d2=(y2+1)+d2.slice(4); out.due=d2; }
+  if(dm) t=t.replace(dm[0]," ");
+  var title=t.replace(/\s*[·,|;:]\s*/g," ").replace(/\s+-\s+/g," ").replace(/\s+/g," ").trim().replace(/^(to|for)\s+/i,"").replace(/\s+(by|on|due|for|to)$/i,"");
+  out.title=title?title.charAt(0).toUpperCase()+title.slice(1):"";
+  return out;
+}
+function quickPreviewHTML(q){
+  if(!String(q||"").trim()) return 'Names, client names, "today", "tomorrow", a weekday, "25 Oct" and P1/P2/P3 are picked up automatically.';
+  var p=parseQuick(q);
+  return '→ <b>'+esc(p.title||"(no task text yet)")+'</b> · '+(p.owner?'owner <b>'+esc(p.owner)+'</b>':'<span class="miss">no owner</span>')
+    +' · '+(p.client?'<b>'+esc(p.client)+'</b>':'internal')+' · '+(p.due?'due <b>'+esc(wdayShort(p.due)+" "+fmtD(p.due))+'</b>':'<span class="miss">no date</span>')+' · '+p.priority+' — press Enter to add';
+}
+function viewReview(){
+  if(UI.revOff==null) UI.revOff=-1;
+  var start=addDays(weekStart(),7*UI.revOff), end=addDays(start,6), t=today(), fin=financeOn();
+  var inR=function(d){ d=String(d||"").slice(0,10); return d&&d>=start&&d<=end; };
+  var label=UI.revOff===0?"This week so far":UI.revOff===-1?"Last week":"Week of "+fmtD(start);
+  var h='<div class="sec-head"><h2 class="h-sec">Weekly review</h2><span class="sub">'+esc(label)+' · '+fmtD(start)+' – '+fmtD(end)+' · 15 minutes every Monday</span><span class="spacer"></span>'
+   +'<button class="btn ghost sm" data-act="revweek" data-v="-1">← Earlier</button> '+(UI.revOff<0?'<button class="btn ghost sm" data-act="revweek" data-v="1">Later →</button>':"")+'</div>';
+  // delivery
+  var done=S.tasks.filter(function(x){return x.status==="Done"&&inR(x.done_at);});
+  var od=S.tasks.filter(overdue), stuck=od.filter(function(x){return x.due<addDays(t,-3);});
+  var posts=S.posts.filter(function(p){return inR(p.date);}), live=posts.filter(function(p){return p.status==="Live";});
+  var late=S.posts.filter(function(p){return p.date<t&&p.status!=="Live"&&inR(p.date);});
+  var changes=S.posts.filter(function(p){return p.client_status==="changes"&&inR(p.client_feedback_at);});
+  var newLeads=S.leads.filter(function(l){return inR(l.created_at);});
+  var won=S.leads.filter(function(l){return l.stage==="Won"&&inR(l.updated_at);}), lost=S.leads.filter(function(l){return l.stage==="Lost"&&inR(l.updated_at);});
+  var openL=S.leads.filter(function(l){return l.stage!=="Won"&&l.stage!=="Lost";});
+  var fuOver=openL.filter(function(l){return l.next_date&&l.next_date<t;}), needT=openL.filter(function(l){return l.needs_tejas;});
+  var hrs=S.timeLogs.filter(function(x){return inR(x.date);}), hrsTot=hrs.reduce(function(a,x){return a+(Number(x.hours)||0);},0);
+  h+='<div class="tiles">'
+   +tile(done.length,"Tasks done",label.toLowerCase(),done.length?"good":"")
+   +tile(od.length,"Overdue now",stuck.length+" stuck 3+ days",od.length?"bad":"good","tasks|overdue")
+   +tile(live.length+" / "+posts.length,"Posts live",late.length?late.length+" date passed, not live":"all on track",late.length?"warn":"good")
+   +tile(newLeads.length,"New leads",won.length+" won · "+lost.length+" lost","")
+   +tile(fuOver.length,"Lead follow-ups late",needT.length+" waiting on Tejas",fuOver.length?"warn":"good","leads|followups")
+   +tile(hrsTot||"—","Hours logged",hrs.length?"across "+hrs.length+" entries":"nobody logged hours","")
+   +'</div>';
+  // decisions
+  var dec=[];
+  if(stuck.length) dec.push('<b>'+stuck.length+' task'+(stuck.length>1?"s":"")+' stuck 3+ days</b> — finish, re-date or reassign: '+stuck.slice(0,4).map(function(x){return esc(x.title)+" ("+esc(pname(x.owner_id))+")";}).join(", ")+(stuck.length>4?"…":""));
+  var behind={}; late.forEach(function(p){ behind[p.client_id]=(behind[p.client_id]||0)+1; });
+  Object.keys(behind).sort(function(a,b){return behind[b]-behind[a];}).slice(0,3).forEach(function(cid){ dec.push('<b>'+esc(clientName(cid))+'</b> has '+behind[cid]+' post'+(behind[cid]>1?"s":"")+' past date and not live'); });
+  if(changes.length) dec.push('<b>'+changes.length+' change request'+(changes.length>1?"s":"")+'</b> from clients — '+changes.slice(0,3).map(function(p){return esc(clientName(p.client_id))+": "+esc(p.title);}).join(", "));
+  if(needT.length) dec.push('<b>'+needT.length+' lead'+(needT.length>1?"s":"")+' waiting on your decision</b> — '+needT.slice(0,4).map(function(l){return esc(l.name);}).join(", "));
+  if(fuOver.length) dec.push('<b>'+fuOver.length+' lead follow-up'+(fuOver.length>1?"s":"")+' are late</b> — oldest: '+fuOver.sort(function(a,b){return a.next_date<b.next_date?-1:1;}).slice(0,3).map(function(l){return esc(l.name)+" ("+fmtD(l.next_date)+")";}).join(", "));
+  S.clients.forEach(function(c){ if(c.health==="At risk") dec.push('<b>'+esc(c.name)+'</b> is marked at risk — plan a check-in call'); if(c.health==="Upsell opportunity") dec.push('<b>'+esc(c.name)+'</b> is marked as an upsell opportunity — prepare the pitch'); });
+  if(fin){
+    var lateInv=S.invoices.filter(function(v){ if(!v.raised||v.paid_on) return false; var c=byId(S.clients,v.client_id); var dd=v.month+"-"+pad(Math.min(Number(c&&c.invoice_day)||1,monthDays(v.month))); return dd<t; });
+    if(lateInv.length) dec.push('<b>'+lateInv.length+' invoice'+(lateInv.length>1?"s":"")+' unpaid past due</b> — '+lateInv.slice(0,4).map(function(v){return esc(clientName(v.client_id));}).join(", "));
+    if(!S.overheads.some(function(o){return o.month===thisMonth();})) dec.push('No overheads logged for '+esc(monthLabel(thisMonth()))+' yet — true profit is overstated until you add them (Money tab)');
+  }
+  if(!hrs.length) dec.push('Nobody logged hours this week — remind the team to use "Log your hours" on Today');
+  h+='<div class="card"><div class="card-head"><h3>Decide this week</h3><span class="sub">generated from the board — nothing is assigned automatically</span></div><div class="card-body">'
+   +(dec.length?'<ol class="rv-list" style="margin:0 0 0 18px;padding:0">'+dec.map(function(x){return "<li>"+x+"</li>";}).join("")+'</ol>':'<div class="sub">Nothing needs a decision. Clean week.</div>')+'</div></div><div style="height:14px"></div>';
+  // per person
+  var team=S.people.filter(function(p){return p.kind==="team";});
+  h+='<div class="card scroll"><div class="card-head"><h3>People</h3></div><table><thead><tr><th>Person</th><th class="right">Done</th><th class="right">Overdue now</th><th class="right">Open</th><th class="right">Hours</th></tr></thead><tbody>'
+   +team.map(function(p){ var s=statsFor(p.id); var dn=done.filter(function(x){return x.owner_id===p.id;}).length; var hh=hrs.filter(function(x){return x.person_id===p.id;}).reduce(function(a,x){return a+(Number(x.hours)||0);},0);
+      return '<tr><td><b>'+esc(p.name)+'</b></td><td class="right tnum">'+dn+'</td><td class="right tnum">'+(s.od?'<span class="chip red">'+s.od+'</span>':"0")+'</td><td class="right tnum">'+s.open+'</td><td class="right tnum">'+(hh||"—")+'</td></tr>'; }).join("")
+   +'</tbody></table></div><div style="height:14px"></div>';
+  // per client content
+  var cids=S.clients.filter(function(c){return c.status!=="Ended";});
+  h+='<div class="card scroll"><div class="card-head"><h3>Content by client</h3></div><table><thead><tr><th>Client</th><th class="right">Planned</th><th class="right">Live</th><th class="right">Late</th><th class="right">Client ✓ / ✎</th><th>Health</th></tr></thead><tbody>'
+   +cids.map(function(c){ var ps=posts.filter(function(p){return p.client_id===c.id;}); var lv=ps.filter(function(p){return p.status==="Live";}).length; var lt=late.filter(function(p){return p.client_id===c.id;}).length;
+      var ok=ps.filter(function(p){return p.client_status==="approved";}).length, ch=ps.filter(function(p){return p.client_status==="changes";}).length;
+      return '<tr><td><b>'+esc(c.name)+'</b></td><td class="right tnum">'+ps.length+'</td><td class="right tnum">'+lv+'</td><td class="right tnum">'+(lt?'<span class="chip red">'+lt+'</span>':"0")+'</td><td class="right tnum">'+ok+" / "+ch+'</td><td><span class="chip '+healthChip(c.health||"Happy")+'">'+esc(c.health||"Happy")+'</span></td></tr>'; }).join("")
+   +'</tbody></table></div>';
+  if(fin){
+    var paid=S.invoices.filter(function(v){return inR(v.paid_on);});
+    var paidAmt=paid.reduce(function(a,v){return a+toINR(v.amount,curOf(v.client_id));},0);
+    h+='<div style="height:14px"></div><div class="card"><div class="card-head"><h3>Money</h3><span class="chip lime">Tejas + Snehal only</span></div><div class="card-body">'
+     +'<div class="kv"><span>Collected '+esc(label.toLowerCase())+'</span><b class="tnum">'+money(paidAmt)+'</b></div>'
+     +paid.map(function(v){return '<div class="kv"><span class="sub">'+esc(clientName(v.client_id))+' · paid '+fmtD(v.paid_on)+'</span><span class="tnum sub">'+fmtC(v.amount,curOf(v.client_id))+'</span></div>';}).join("")
+     +'</div></div>';
+  }
+  return h;
+}
 function viewTasks(){
   if(!UI.tWhoSet){ UI.tWho=isManager()?"all":(myPersonId()||"all"); UI.tWhoSet=true; }
   var list=tasksFiltered();
@@ -1040,6 +1149,9 @@ function viewTasks(){
    +'<select data-act="fstatus"><option value="open"'+(UI.tStatus==="open"?" selected":"")+'>Open only</option><option value="all"'+(UI.tStatus==="all"?" selected":"")+'>All</option>'+selOpts(TASK_STATUS,UI.tStatus)+'</select>'
    +'</div>';
 
+  h+='<div class="card" style="margin-bottom:14px;border-color:var(--purple)"><div class="card-head"><h3>Quick add</h3><span class="sub">type it like a WhatsApp message — e.g. <i>Shubham Dhananjay Diwali carousel Friday P1</i></span></div><div class="card-body">'
+   +'<form data-act="quickadd" style="display:flex;gap:8px"><input type="text" id="quickTask" name="q" autocomplete="off" placeholder="who · what · client · when" style="flex:1"><button class="btn" type="submit">Add</button></form>'
+   +'<div class="qa-prev" id="quickPreview">Names, client names, "today", "tomorrow", a weekday, "25 Oct" and P1/P2/P3 are picked up automatically.</div></div></div>';
   h+='<div class="card"><div class="card-head"><h3>Add a task</h3></div><div class="card-body">'
    +'<form class="inline-form" data-act="addtask">'
    +'<div class="field" style="flex:2 1 240px"><label>What exactly gets delivered</label><input type="text" name="title" required placeholder="e.g. 4 reels edited for Client A"></div>'
@@ -1394,8 +1506,9 @@ function viewOnboard(){
 /* ---------------- calendar ---------------- */
 function postEditor(){
   var p=byId(S.posts,UI.post); if(!p) return "";
+  var fb=p.client_status?'<div style="margin-bottom:10px;padding:8px 10px;border-radius:6px;background:'+(p.client_status==="approved"?"var(--green-soft)":"var(--red-soft)")+'"><b>'+(p.client_status==="approved"?"Client approved":"Client asked for changes")+'</b>'+(p.client_feedback_at?' <span class="sub">'+fmtDT(p.client_feedback_at)+'</span>':"")+(p.client_feedback?'<div style="white-space:pre-wrap;margin-top:4px">'+esc(p.client_feedback)+'</div>':"")+'</div>':"";
   return '<div class="card" style="border-color:var(--purple)"><div class="card-head"><h3>Edit post</h3><span class="sub">changes save as you type</span><span class="spacer"></span><button class="btn ghost sm" data-act="closepost">Close</button></div><div class="card-body">'
-   +'<div class="grid g2">'
+   +fb+'<div class="grid g2">'
    +'<div class="field" style="grid-column:1/-1"><label>Idea / caption</label><input type="text" data-act="postset" data-f="title" data-v="'+p.id+'" value="'+esc(p.title)+'"></div>'
    +'<div class="field"><label>Date <span class="sub" style="font-weight:400">'+(p.date?esc(fmtDord(p.date)+" · "+wdayFull(p.date)):"")+'</span></label><input type="date" data-act="postset" data-f="date" data-v="'+p.id+'" value="'+esc(p.date)+'"></div>'
    +'<div class="field"><label>Type</label><select data-act="postset" data-f="type" data-v="'+p.id+'">'+selOpts(["Reel","Static","Carousel","Story","Video","Blog","Post"],p.type)+'</select></div>'
@@ -1426,10 +1539,14 @@ function viewCalendar(){
    +'<input type="month" data-act="calmonth" value="'+esc(mo)+'">'
    +(ALL?'<span class="sub">pick one client to paste, sync or add posts</span>':'<button class="btn sm" data-act="togglepaste">'+(UI.showPaste?"Hide paste box":"Paste a month from Sheets")+'</button>')
    +'<a class="btn ghost sm" href="template.xlsx" download="Stirr_Content_Calendar_Template.xlsx" style="text-decoration:none">⤓ Planning template</a>'
+   +(!ALL&&isManager()?'<button class="btn sm ghost" data-act="sharecal">🔗 Client approval link</button>':"")
    +(ALL?"":(function(){ var sh=getSetting("sheets")||{}; var surl=sh[cid];
       return (surl?'<button class="btn sm" data-act="sheetsync">⟳ Sync from Google Sheet</button>':"")
         +(financeOn()?'<button class="chip grey" data-act="sheetlink">'+(surl?"edit sheet link":"🔗 link this client\'s Google Sheet")+'</button>':(surl?"":'<span class="sub">no sheet linked yet</span>')); })())
-   +'<span class="spacer"></span>'+POST_STATUS.map(function(s){return '<span class="chip '+statusChip(s)+'">'+s+" "+counts[s]+'</span>';}).join(" ")+'</div>';
+   +'<span class="spacer"></span>'+POST_STATUS.map(function(s){return '<span class="chip '+statusChip(s)+'">'+s+" "+counts[s]+'</span>';}).join(" ")
+   +(function(){ var ok=posts.filter(function(p){return p.client_status==="approved";}).length, ch=posts.filter(function(p){return p.client_status==="changes";}).length;
+       return (ok||ch)?' <span class="chip green">client ✓ '+ok+'</span>'+(ch?' <span class="chip red">changes asked '+ch+'</span>':""):""; })()
+   +'</div>';
 
   h+=postEditor();
 
@@ -1447,7 +1564,7 @@ function viewCalendar(){
   for(var d=1;d<=days;d++){
     var ds=mo+"-"+pad(d), dp=posts.filter(function(p){return p.date===ds;});
     h+='<div class="cell'+(ds===today()?" tdy":"")+'"><div class="d">'+d+' <span style="font-weight:400;color:#8a887f;font-size:10px">'+wdayShort(ds)+'</span></div>'
-     + dp.map(function(p){ var late=p.date<today()&&p.status!=="Live"; return '<button class="post p-'+String(p.status).toLowerCase()+(late?" late":"")+'" data-act="openpost" data-v="'+p.id+'" title="'+esc((ALL?clientName(p.client_id)+" · ":"")+(late?"date passed, not live · ":"")+p.type+(p.product?(" · "+p.product):"")+" · "+(p.owner_name||"")+" · "+p.status+(p.remarks?(" · "+p.remarks):""))+'">'+(ALL?'<b>'+esc(String(clientName(p.client_id)).split(" ")[0])+'</b> ':"")+(p.content_link?"🔗 ":"")+esc(p.title)+'</button>'; }).join("")
+     + dp.map(function(p){ var late=p.date<today()&&p.status!=="Live"; return '<button class="post p-'+String(p.status).toLowerCase()+(late?" late":"")+'" data-act="openpost" data-v="'+p.id+'" title="'+esc((ALL?clientName(p.client_id)+" · ":"")+(late?"date passed, not live · ":"")+p.type+(p.product?(" · "+p.product):"")+" · "+(p.owner_name||"")+" · "+p.status+(p.remarks?(" · "+p.remarks):""))+'">'+(p.client_status==="approved"?'<span class="cs" title="client approved">✓</span>':p.client_status==="changes"?'<span class="cs" style="color:var(--red)" title="client asked for changes">✎</span>':"")+(ALL?'<b>'+esc(String(clientName(p.client_id)).split(" ")[0])+'</b> ':"")+(p.content_link?"🔗 ":"")+esc(p.title)+'</button>'; }).join("")
      +'</div>';
   }
   h+='</div></div></div>';
@@ -1604,6 +1721,16 @@ document.addEventListener("click",function(ev){
     return;
   }
   if(act==="closelead"){ UI.lead=null; redrawLeads(); return; }
+  if(act==="sharecal"){
+    var cc=byId(S.clients,UI.calClient); if(!cc) return;
+    if(!cc.share_token){ toast("Approval links need the latest database update — ask Claude to run it.",true); return; }
+    var url=location.origin+location.pathname.replace(/[^\/]*$/,"")+"approve.html?k="+cc.share_token+"&m="+(UI.calMonth||thisMonth());
+    var done=function(){ toast("Approval link for "+cc.name+" ("+monthLabel(UI.calMonth||thisMonth())+") copied — paste it to the client on WhatsApp"); };
+    if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done,function(){ prompt("Copy this link for the client:",url); });
+    else prompt("Copy this link for the client:",url);
+    return;
+  }
+  if(act==="revweek"){ UI.revOff=(UI.revOff==null?-1:UI.revOff)+Number(v); render(); return; }
   if(act==="taskopen"){ UI.taskOpen=UI.taskOpen===v?null:v; var trs=document.getElementById("taskResults"); if(trs&&UI.tab==="tasks") trs.innerHTML=taskBoard(); else render(); return; }
   if(act==="postrev"){ var pr=byId(S.posts,v); if(!pr) return; pr.revisions=Math.max(0,(Number(pr.revisions)||0)+Number(k)); render(); run(DB.update("posts",v,{revisions:pr.revisions})); return; }
   if(act==="delhours"){ S.timeLogs=S.timeLogs.filter(function(x){return x.id!==v;}); render(); run(DB.remove("time_logs",v)); return; }
@@ -1788,6 +1915,7 @@ document.addEventListener("click",function(ev){
 document.addEventListener("input",function(ev){
   var id=ev.target&&ev.target.id;
   if(id==="leadSearch"){ UI.leadQ=ev.target.value; UI.leadPage=1; redrawLeads(); return; }
+  if(id==="quickTask"){ var qp=document.getElementById("quickPreview"); if(qp) qp.innerHTML=quickPreviewHTML(ev.target.value); return; }
   if(id==="taskSearch"){ UI.taskQ=ev.target.value; var tr=document.getElementById("taskResults"); if(tr) tr.innerHTML=taskBoard(); return; }
   if(id==="gsearch"){ gSearch(ev.target.value); return; }
 });
@@ -1884,6 +2012,13 @@ document.addEventListener("submit",function(ev){
     var btn=el.querySelector("button"); btn.disabled=true; btn.textContent="Signing in…";
     DB.signIn(d.email,d.password).then(function(){ return boot(); })
       .catch(function(e){ document.getElementById("root").innerHTML=loginView((e&&e.message)||"Could not sign in"); });
+    return;
+  }
+  if(act==="quickadd"){
+    var qa=parseQuick(d.q); if(!qa.title){ toast("Type what needs to be delivered",true); return; }
+    var qrow={title:qa.title,client_id:qa.client_id||null,owner_id:qa.owner_id||null,due:qa.due||null,priority:qa.priority,status:"Not Started"};
+    el.reset(); var qpv=document.getElementById("quickPreview"); if(qpv) qpv.innerHTML=quickPreviewHTML("");
+    run(DB.insert("tasks",qrow).then(function(r){ S.tasks.push(r||qrow); render(); var qi=document.getElementById("quickTask"); if(qi) qi.focus(); }),"Added: "+qa.title+(qa.owner?" → "+qa.owner:"")+(qa.due?" · "+fmtD(qa.due):""));
     return;
   }
   if(act==="addtask"){
@@ -2005,7 +2140,7 @@ if(sb||DEMO) boot();
 function userBusy(){
   var ae=document.activeElement;
   if(ae&&(ae.tagName==="INPUT"||ae.tagName==="TEXTAREA"||ae.tagName==="SELECT")) return true;
-  var forms=document.querySelectorAll('form[data-act="addtask"],form[data-act="addlead"],form[data-act="addclient"],form[data-act="addrecur"],form[data-act="addperson"],form[data-act="addpost"],form[data-act="addexp"],form[data-act="paste"]');
+  var forms=document.querySelectorAll('form[data-act="quickadd"],form[data-act="addtask"],form[data-act="addlead"],form[data-act="addclient"],form[data-act="addrecur"],form[data-act="addperson"],form[data-act="addpost"],form[data-act="addexp"],form[data-act="paste"]');
   for(var i=0;i<forms.length;i++){
     var els=forms[i].querySelectorAll('input,textarea');
     for(var j=0;j<els.length;j++){

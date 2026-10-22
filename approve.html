@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Content approval · Stirr Studio</title>
+<style>
+:root{--ink:#16151a;--bone:#f6f4ee;--card:#fff;--line:#e4e1d8;--muted:#6b6960;--lime:#d7f34a;--lav:#7b61ff;--green:#1f8a4c;--green-soft:#e6f5ec;--red:#c0392b;--red-soft:#fbeaea;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--ink:#f2f0ea;--bone:#121115;--card:#1c1b21;--line:#2e2c35;--muted:#a3a097;--green-soft:#173423;--red-soft:#3a1d1b;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bone);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
+main{max-width:760px;margin:0 auto;padding:22px 16px 60px}
+.brand{font-weight:700;font-size:18px;letter-spacing:-.02em;display:flex;align-items:center;gap:8px}
+.brand i{width:8px;height:20px;background:var(--lav);display:block;border-radius:1px}
+h1{font-size:26px;line-height:1.15;letter-spacing:-.02em;margin:18px 0 4px}
+.muted{color:var(--muted)}
+.nav{display:flex;gap:8px;align-items:center;margin:14px 0 6px;flex-wrap:wrap}
+button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:8px 14px}
+button.ok{background:var(--green);border-color:var(--green);color:#fff}
+button.chg{background:transparent}
+button:disabled{opacity:.5;cursor:default}
+.sum{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 18px}
+.pill{font-size:12px;padding:3px 10px;border-radius:99px;border:1px solid var(--line);background:var(--card)}
+.pill.g{background:var(--green-soft);border-color:transparent;color:var(--green)}
+.pill.r{background:var(--red-soft);border-color:transparent;color:var(--red)}
+.post{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.post.approved{border-color:var(--green)}
+.post.changes{border-color:var(--red)}
+.meta{font-size:12.5px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}
+.title{font-weight:600;font-size:16px;margin:4px 0 8px;white-space:pre-wrap}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+a.view{color:var(--lav);font-weight:600;text-decoration:none}
+textarea{width:100%;font:inherit;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--bone);color:var(--ink);margin:8px 0;min-height:70px}
+.fb{font-size:13.5px;margin-top:8px;padding:8px 10px;border-radius:8px;white-space:pre-wrap}
+.fb.approved{background:var(--green-soft)} .fb.changes{background:var(--red-soft)}
+.empty{background:var(--card);border:1px dashed var(--line);border-radius:12px;padding:28px;text-align:center;color:var(--muted)}
+footer{margin-top:30px;font-size:12px;color:var(--muted);text-align:center}
+</style>
+</head>
+<body>
+<main id="app"><div class="brand"><i></i>Stirr Studio</div><p class="muted">Loading your content calendar…</p></main>
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+(function(){
+  var C=window.STIRR_CONFIG||{}, qs=new URLSearchParams(location.search);
+  var k=(qs.get("k")||"").trim(), m=qs.get("m")||"";
+  var app=document.getElementById("app"), name="", rows=[], open={};
+  function pad(n){return n<10?"0"+n:""+n;}
+  if(!/^\d{4}-\d{2}$/.test(m)){ var d0=new Date(); m=d0.getFullYear()+"-"+pad(d0.getMonth()+1); }
+  function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c];});}
+  function bad(msg){ app.innerHTML='<div class="brand"><i></i>Stirr Studio</div><h1>This link isn’t working</h1><p class="muted">'+esc(msg||"Please ask Stirr Studio for a fresh approval link.")+'</p>'; }
+  if(!/^[0-9a-f-]{36}$/i.test(k)||!C.url||!window.supabase){ bad(); return; }
+  var sb=window.supabase.createClient(C.url,C.anonKey,{auth:{persistSession:false,autoRefreshToken:false}});
+  function monthLabel(x){ var p=x.split("-"); return ["January","February","March","April","May","June","July","August","September","October","November","December"][(+p[1])-1]+" "+p[0]; }
+  function shift(n){ var p=m.split("-"); var d=new Date(+p[0],(+p[1])-1+n,1); return d.getFullYear()+"-"+pad(d.getMonth()+1); }
+  function fmt(ds){ var p=String(ds).split("-"); var d=new Date(+p[0],(+p[1])-1,+p[2]); return d.toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"}); }
+  function load(){
+    Promise.all([sb.rpc("client_by_token",{p_token:k}),sb.rpc("client_calendar",{p_token:k,p_month:m})]).then(function(r){
+      if(r[0].error||!r[0].data){ bad(); return; }
+      name=r[0].data; rows=r[1].error?[]:(r[1].data||[]); draw();
+    }).catch(function(){ bad("We couldn’t load the calendar. Please check your connection and refresh."); });
+  }
+  function draw(){
+    var ok=rows.filter(function(x){return x.client_status==="approved";}).length, ch=rows.filter(function(x){return x.client_status==="changes";}).length, pending=rows.length-ok-ch;
+    var h='<div class="brand"><i></i>Stirr Studio</div><h1>'+esc(name)+' — '+esc(monthLabel(m))+'</h1>'
+      +'<p class="muted">Review each post below. Approve it, or tell us what to change — your note goes straight to the team.</p>'
+      +'<div class="nav"><button data-a="prev">← '+esc(monthLabel(shift(-1)))+'</button><button data-a="next">'+esc(monthLabel(shift(1)))+' →</button></div>'
+      +'<div class="sum"><span class="pill">'+rows.length+' posts</span><span class="pill g">'+ok+' approved</span>'+(ch?'<span class="pill r">'+ch+' changes requested</span>':"")+(pending?'<span class="pill">'+pending+' waiting for you</span>':"")+'</div>';
+    if(!rows.length) h+='<div class="empty">Nothing planned for this month yet.</div>';
+    rows.forEach(function(x){
+      var st=x.client_status||"";
+      h+='<div class="post '+esc(st)+'"><div class="meta"><span>'+esc(fmt(x.date))+'</span><span>'+esc(x.type||"Post")+'</span>'+(x.product?'<span>'+esc(x.product)+'</span>':"")+'</div>'
+        +'<div class="title">'+esc(x.title)+'</div>'
+        +'<div class="row">'+(x.content_link?'<a class="view" href="'+esc(x.content_link)+'" target="_blank" rel="noopener">View creative ↗</a>':'<span class="muted" style="font-size:13px">Creative not attached yet</span>')+'<span style="flex:1"></span>'
+        +'<button class="ok" data-a="ok" data-id="'+esc(x.id)+'"'+(st==="approved"?" disabled":"")+'>'+(st==="approved"?"Approved ✓":"Approve")+'</button>'
+        +'<button class="chg" data-a="chg" data-id="'+esc(x.id)+'">'+(st==="changes"?"Edit note":"Ask for changes")+'</button></div>'
+        +(open[x.id]?'<textarea id="t-'+esc(x.id)+'" placeholder="What should we change?">'+esc(st==="changes"?x.client_feedback:"")+'</textarea><div class="row"><button class="ok" data-a="send" data-id="'+esc(x.id)+'">Send to the team</button><button data-a="cancel" data-id="'+esc(x.id)+'">Cancel</button></div>':"")
+        +(st&&x.client_feedback&&!open[x.id]?'<div class="fb '+esc(st)+'">'+esc(x.client_feedback)+'</div>':"")
+        +'</div>';
+    });
+    h+='<footer>Private link for '+esc(name)+'. Please don’t forward it.</footer>';
+    app.innerHTML=h;
+  }
+  function save(id,status,text,btn){
+    if(btn) btn.disabled=true;
+    sb.rpc("client_review",{p_token:k,p_post:id,p_status:status,p_feedback:text||""}).then(function(r){
+      if(r.error||!r.data){ alert("That didn’t save. Please try again."); if(btn) btn.disabled=false; return; }
+      rows.forEach(function(x){ if(x.id===id){ x.client_status=status; x.client_feedback=text||""; } });
+      delete open[id]; draw();
+    });
+  }
+  app.addEventListener("click",function(ev){
+    var b=ev.target.closest("button[data-a]"); if(!b) return;
+    var a=b.getAttribute("data-a"), id=b.getAttribute("data-id");
+    if(a==="prev"||a==="next"){ m=shift(a==="prev"?-1:1); history.replaceState(null,"","?k="+k+"&m="+m); app.innerHTML='<div class="brand"><i></i>Stirr Studio</div><p class="muted">Loading…</p>'; load(); return; }
+    if(a==="ok"){ save(id,"approved","",b); return; }
+    if(a==="chg"){ open[id]=true; draw(); var t=document.getElementById("t-"+id); if(t) t.focus(); return; }
+    if(a==="cancel"){ delete open[id]; draw(); return; }
+    if(a==="send"){ var ta=document.getElementById("t-"+id), v=ta?ta.value.trim():""; if(!v){ if(ta) ta.focus(); return; } save(id,"changes",v,b); }
+  });
+  load();
+})();
+</script>
+</body>
+</html>
