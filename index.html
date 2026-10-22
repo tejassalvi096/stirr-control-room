@@ -921,11 +921,11 @@ function myDayCard(){
 }
 function viewToday(){
   var t=today(),h="";
+  h+=goalCard();
   h+=helloCard();
   h+=myDayCard();
   h+=hoursCard();
   h+=notesCard();
-  h+=goalCard();
   h+=yesterdayCard();
   var open=S.tasks.filter(isOpen), od=open.filter(overdue), due=open.filter(function(x){return x.due===t;});
   var loose=open.filter(function(x){ return !x.owner_id||!x.due; });
