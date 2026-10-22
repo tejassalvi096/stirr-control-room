@@ -1018,8 +1018,17 @@ function tasksFiltered(){
   list.sort(function(a,b){return (a.due||"9999")<(b.due||"9999")?-1:1;});
   return list;
 }
+function taskBoard(){
+  var list=tasksFiltered();
+  if(UI.tDue) return taskTable(list,false);
+  var od=list.filter(overdue), rest=list.filter(function(t){return !overdue(t);});
+  if(!od.length) return taskTable(rest,false);
+  return '<div class="sec-head" style="margin:4px 0 8px"><h3 style="color:var(--red);font-size:17px">Overdue · '+od.length+'</h3><span class="sub">past their due date — finish, re-date or reassign these first</span></div>'
+    +taskTable(od,false)
+    +(rest.length?'<div class="sec-head" style="margin:18px 0 8px"><h3 style="font-size:17px">Due next</h3><span class="sub">'+rest.length+' open, soonest first</span></div>'+taskTable(rest,false):"");
+}
 function viewTasks(){
-  if(!UI.tWhoSet){ UI.tWho=myPersonId()||"all"; UI.tWhoSet=true; }
+  if(!UI.tWhoSet){ UI.tWho=isManager()?"all":(myPersonId()||"all"); UI.tWhoSet=true; }
   var list=tasksFiltered();
 
   var h='<div class="sec-head"><h2 class="h-sec">Task board</h2><span class="sub">one owner, one date, or it does not exist</span></div>';
@@ -1040,16 +1049,16 @@ function viewTasks(){
    +'<div class="field" style="flex:0 0 90px"><label>Priority</label><select name="priority">'+selOpts(PRIORITIES,"P2")+'</select></div>'
    +'<button class="btn" type="submit">Add</button></form></div></div><div style="height:14px"></div>';
 
-  h+='<div id="taskResults">'+taskTable(list,false)+'</div>';
+  h+='<div id="taskResults">'+taskBoard()+'</div>';
 
   h+='<div class="sec" style="margin-top:30px"><div class="sec-head"><h2 class="h-sec">Repeating work</h2><span class="sub">appears on Today by itself — nobody assigns these</span></div>'
    +'<div class="card scroll"><table><thead><tr><th>Task</th><th>Repeats</th><th>Owner</th><th></th></tr></thead><tbody>'
    + S.recurring.slice().sort(function(a,b){return (a.sort||0)-(b.sort||0);}).map(function(r){
       var when=r.freq==="daily"?"Every day (Mon–Sat)":r.freq==="weekly"?("Every "+DOW[Number(r.day)||1]):("Monthly, day "+(r.day||1));
       return '<tr><td><input type="text" data-act="rset" data-f="title" data-v="'+r.id+'" value="'+esc(r.title)+'" style="min-width:200px"></td>'
-       +'<td style="white-space:nowrap"><select data-act="rset" data-f="freq" data-v="'+r.id+'"><option value="daily"'+(r.freq==="daily"?" selected":"")+'>Every day</option><option value="weekly"'+(r.freq==="weekly"?" selected":"")+'>Weekly</option><option value="monthly"'+(r.freq==="monthly"?" selected":"")+'>Monthly</option></select>'
-       +(r.freq==="daily"?"":' <input type="number" min="1" max="31" data-act="rset" data-f="day" data-v="'+r.id+'" value="'+esc(r.day||1)+'" style="width:64px" title="'+(r.freq==="weekly"?"1=Mon … 6=Sat":"day of month")+'">')
-       +' <span class="sub">'+when+'</span></td>'
+       +'<td><select data-act="rset" data-f="freq" data-v="'+r.id+'" style="width:auto;display:inline-block"><option value="daily"'+(r.freq==="daily"?" selected":"")+'>Every day</option><option value="weekly"'+(r.freq==="weekly"?" selected":"")+'>Weekly</option><option value="monthly"'+(r.freq==="monthly"?" selected":"")+'>Monthly</option></select>'
+       +(r.freq==="daily"?"":' <input type="number" min="1" max="31" data-act="rset" data-f="day" data-v="'+r.id+'" value="'+esc(r.day||1)+'" style="width:64px;display:inline-block" title="'+(r.freq==="weekly"?"1=Mon … 6=Sat":"day of month")+'">')
+       +'<br><span class="sub">'+when+'</span></td>'
        +'<td>'+ownerSelect(r.owner_name,["Everyone"],'data-act="rset" data-f="owner_name" data-v="'+r.id+'"')+'</td><td class="right"><button class="icon-btn" data-act="delrecur" data-v="'+r.id+'">✕</button></td></tr>';
     }).join("")+'</tbody></table></div>'
    +'<div class="card"><div class="card-body"><form class="inline-form" data-act="addrecur">'
@@ -1595,7 +1604,7 @@ document.addEventListener("click",function(ev){
     return;
   }
   if(act==="closelead"){ UI.lead=null; redrawLeads(); return; }
-  if(act==="taskopen"){ UI.taskOpen=UI.taskOpen===v?null:v; var trs=document.getElementById("taskResults"); if(trs&&UI.tab==="tasks") trs.innerHTML=taskTable(tasksFiltered(),false); else render(); return; }
+  if(act==="taskopen"){ UI.taskOpen=UI.taskOpen===v?null:v; var trs=document.getElementById("taskResults"); if(trs&&UI.tab==="tasks") trs.innerHTML=taskBoard(); else render(); return; }
   if(act==="postrev"){ var pr=byId(S.posts,v); if(!pr) return; pr.revisions=Math.max(0,(Number(pr.revisions)||0)+Number(k)); render(); run(DB.update("posts",v,{revisions:pr.revisions})); return; }
   if(act==="delhours"){ S.timeLogs=S.timeLogs.filter(function(x){return x.id!==v;}); render(); run(DB.remove("time_logs",v)); return; }
   if(act==="deloh"){ S.overheads=S.overheads.filter(function(x){return x.id!==v;}); render(); run(DB.remove("overheads",v)); return; }
@@ -1779,7 +1788,7 @@ document.addEventListener("click",function(ev){
 document.addEventListener("input",function(ev){
   var id=ev.target&&ev.target.id;
   if(id==="leadSearch"){ UI.leadQ=ev.target.value; UI.leadPage=1; redrawLeads(); return; }
-  if(id==="taskSearch"){ UI.taskQ=ev.target.value; var tr=document.getElementById("taskResults"); if(tr) tr.innerHTML=taskTable(tasksFiltered(),false); return; }
+  if(id==="taskSearch"){ UI.taskQ=ev.target.value; var tr=document.getElementById("taskResults"); if(tr) tr.innerHTML=taskBoard(); return; }
   if(id==="gsearch"){ gSearch(ev.target.value); return; }
 });
 function gSearch(q){
